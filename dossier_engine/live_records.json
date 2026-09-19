@@ -1,0 +1,11 @@
+{
+  "bioavailability": [
+    {"pmid":"31412624","doi":"10.3390/molecules24162930","title":"Curcumin: Biological, Pharmaceutical, Nutraceutical, and Analytical Aspects.","article_types":["Journal Article","Review"],"mesh_terms":["Animals","Curcuma","Curcumin","Humans","Dietary Supplements"]},
+    {"pmid":"9619120","doi":"10.1055/s-2006-957450","title":"Influence of piperine on the pharmacokinetics of curcumin in animals and human volunteers.","article_types":["Clinical Trial","Journal Article"],"mesh_terms":["Adult","Animals","Curcumin","Humans","Rats"]}
+  ],
+  "arthritis": [
+    {"pmid":"33516238","doi":"10.1186/s13063-021-05053-7","title":"Bioavailable turmeric extract for knee osteoarthritis: a randomized, non-inferiority trial versus paracetamol.","article_types":["Comparative Study","Equivalence Trial","Journal Article"],"mesh_terms":["Curcuma","Humans","Osteoarthritis, Knee","Double-Blind Method"]},
+    {"pmid":"32180294","doi":"10.1002/ptr.6671","title":"Herbal formulation turmeric extract, black pepper, and ginger versus Naproxen for chronic knee osteoarthritis.","article_types":["Journal Article","Randomized Controlled Trial"],"mesh_terms":["Curcuma","Piper nigrum","Humans","Osteoarthritis, Knee","Double-Blind Method"]},
+    {"pmid":"24672232","doi":"10.2147/CIA.S58535","title":"Efficacy and safety of Curcuma domestica extracts compared with ibuprofen in patients with knee osteoarthritis.","article_types":["Comparative Study","Randomized Controlled Trial","Multicenter Study"],"mesh_terms":["Curcuma","Humans","Osteoarthritis, Knee"]}
+  ]
+}

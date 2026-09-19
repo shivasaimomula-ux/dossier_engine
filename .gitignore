@@ -1,0 +1,10 @@
+.env
+.env.*
+.env.txt
+!.env.example
+__pycache__/
+.venv/
+venv/
+node_modules/
+.DS_Store
+*.log

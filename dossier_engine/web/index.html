@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dossier Engine — Honest Evidence Platform</title>
+<style>
+  :root {
+    --bg: #0f1720; --panel: #16212e; --panel2: #1c2938; --line: #26374a;
+    --text: #e6edf3; --muted: #9fb0c0; --accent: #14b8a6; --accent2: #38bdf8;
+    --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444; --partial: #a78bfa;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 1.4rem 2rem; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+    background: linear-gradient(180deg, #16212e, #121b26);
+  }
+  header h1 { font-size: 1.2rem; margin: 0; letter-spacing: .2px; }
+  header .badge {
+    font-size: .72rem; padding: .2rem .6rem; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  header .badge.on { color: var(--ok); border-color: #1f5132; background: #0e2417; }
+  header .badge.off { color: var(--warn); border-color: #5a4413; background: #241c07; }
+  nav { display: flex; gap: .4rem; padding: 0 2rem; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: .9rem 1rem;
+    cursor: pointer; font-size: .92rem; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { max-width: 1000px; margin: 0 auto; padding: 1.8rem 2rem 4rem; }
+  section { display: none; }
+  section.active { display: block; animation: fade .2s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+  h2 { font-size: 1.4rem; margin: .2rem 0 1rem; }
+  h3 { font-size: 1.05rem; margin: 1.4rem 0 .5rem; color: var(--accent2); }
+  p { color: var(--text); }
+  .lead { color: var(--muted); font-size: 1.05rem; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; margin: .8rem 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
+  .agent { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; }
+  .agent .n { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 999px; background: #0e2417; color: var(--accent); font-weight: 700; font-size: .8rem; border: 1px solid #1f5132; }
+  .agent h4 { margin: .5rem 0 .3rem; font-size: .98rem; }
+  .agent p { margin: 0; color: var(--muted); font-size: .88rem; }
+  .pipe { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; color: var(--muted); white-space: pre; overflow-x: auto; background: #0c141d; border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; }
+  label { display: block; font-size: .82rem; color: var(--muted); margin: .7rem 0 .25rem; }
+  input, select, textarea {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 8px; padding: .55rem .6rem; font: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1.2fr 1.2fr .8fr 1fr auto; gap: .5rem; align-items: end; margin-bottom: .5rem; }
+  .row .del { background: #2a1a1a; border: 1px solid #4a2626; color: #f0a3a3; border-radius: 8px; padding: .55rem .7rem; cursor: pointer; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  .btn { background: var(--accent); color: #04211d; border: none; font-weight: 700; padding: .7rem 1.2rem; border-radius: 9px; cursor: pointer; font-size: .95rem; }
+  .btn.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+  .switch { display: flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .88rem; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-block; font-size: .72rem; font-weight: 700; padding: .15rem .55rem; border-radius: 999px; }
+  .pill.AUTHENTICATED, .pill.ok { background: #0e2417; color: var(--ok); border: 1px solid #1f5132; }
+  .pill.PARTIAL { background: #211a33; color: var(--partial); border: 1px solid #3a2f57; }
+  .pill.REJECTED, .pill.FABRICATED, .pill.bad { background: #2a1414; color: var(--bad); border: 1px solid #4a2626; }
+  .pill.UNVERIFIED, .pill.warn { background: #241c07; color: var(--warn); border: 1px solid #5a4413; }
+  .tier { font-size: .78rem; padding: .15rem .5rem; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); }
+  .tier.t5, .tier.t4 { color: var(--ok); border-color: #1f5132; }
+  .tier.t3 { color: var(--warn); border-color: #5a4413; }
+  .tier.t0, .tier.t1 { color: var(--muted); }
+  .authrow { border-left: 3px solid var(--line); padding: .6rem .8rem; margin: .5rem 0; background: var(--panel2); border-radius: 0 8px 8px 0; }
+  .authrow.pass { border-left-color: var(--ok); }
+  .authrow.fail { border-left-color: var(--bad); }
+  .authrow .h { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .authrow .finding { color: var(--muted); font-size: .88rem; margin-top: .3rem; }
+  .report { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.4rem; margin-top: 1rem; }
+  .report h1 { font-size: 1.3rem; } .report h2 { font-size: 1.05rem; border-bottom: 1px solid var(--line); padding-bottom: .3rem; margin-top: 1.4rem; }
+  .report table { width: 100%; border-collapse: collapse; font-size: .84rem; margin: .6rem 0; display: block; overflow-x: auto; }
+  .report th, .report td { border: 1px solid var(--line); padding: .4rem .5rem; text-align: left; vertical-align: top; }
+  .report th { background: var(--panel2); }
+  .report blockquote { border-left: 3px solid var(--accent); margin: .6rem 0; padding: .3rem .8rem; color: var(--muted); background: #0c141d; }
+  .report code, .report pre { font-family: ui-monospace, Menlo, monospace; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .note { font-size: .82rem; color: var(--muted); }
+  .err { background: #2a1414; border: 1px solid #4a2626; color: #f0a3a3; padding: .8rem 1rem; border-radius: 8px; margin-top: 1rem; }
+  details summary { cursor: pointer; color: var(--accent2); font-size: .85rem; margin-top: .3rem; }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr 1fr; } .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🌿 Dossier Engine</h1>
+  <span class="muted" style="font-size:.85rem">Honest Clinical &amp; Regulatory Evidence Platform</span>
+  <span id="authBadge" class="badge">checking…</span>
+</header>
+<nav>
+  <button data-tab="overview" class="active">Overview</button>
+  <button data-tab="how">How it works</button>
+  <button data-tab="analyze">Analyze</button>
+  <button data-tab="history">History <span id="histCount" class="badge" style="padding:.05rem .4rem">0</span></button>
+</nav>
+
+<main>
+  <!-- OVERVIEW -->
+  <section id="overview" class="active">
+    <h2>What this platform does</h2>
+    <p class="lead">It ingests a supplement formulation and produces an <strong>evidence map</strong> — not a polished marketing dossier. Its defining rule:</p>
+    <div class="card" style="border-left:3px solid var(--accent)">
+      The engine never invents a value, citation, concentration, or mechanism. When a source returns nothing, the field is stamped <em>“NOT ESTABLISHED / insufficient data,”</em> and that status propagates all the way to the final document.
+    </div>
+    <h3>The problem it solves</h3>
+    <p>Retrieval systems (and LLMs) tend to over-claim: they hang many pathways and cellular mechanisms on a single PubMed ID, present in-vitro or animal findings as if they support human use, and sometimes cite papers that don’t say what’s claimed. This platform puts a second, independent model — <strong>Claude</strong> — between retrieval and the final report to authenticate every claim against the real paper.</p>
+    <div class="grid">
+      <div class="card"><strong>Grounded</strong><div class="note">Every finding carries a real PubMed citation or is marked a gap.</div></div>
+      <div class="card"><strong>Tiered</strong><div class="note">Evidence is ranked NONE → Preclinical → Human, and language can’t exceed the tier.</div></div>
+      <div class="card"><strong>Authenticated</strong><div class="note">Claude reads the real abstract and rejects claims the paper doesn’t support.</div></div>
+      <div class="card"><strong>Regulatory-aware</strong><div class="note">Disease/treatment phrasing is flagged regardless of evidence.</div></div>
+    </div>
+    <p class="note" style="margin-top:1.4rem">Informational tooling — not medical advice or a regulatory certification. A qualified professional must review the output before any use.</p>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how">
+    <h2>How it works — six agents + an authenticator</h2>
+    <p class="lead">An orchestrator runs five specialists over the formulation; a Claude authentication layer verifies the evidence before it’s graded.</p>
+    <div class="grid" id="agents"></div>
+
+    <h3>The authentication layer</h3>
+    <div class="card">
+      For every <strong>claim–PMID pair</strong>, Claude fetches the <em>real</em> abstract directly from PubMed and answers: is the PMID real? do the paper’s <em>actual findings</em> support this claim? what is the true evidence level (in-vitro / animal / human / RCT)? is this the paper’s primary finding or a peripheral mention? It rejects mismatches, downgrades inflated tiers, and detects a single PMID reused across many unrelated claims.
+    </div>
+
+    <h3>Pipeline</h3>
+    <div class="pipe">per ingredient:
+  PubMed search → retraction check → MeSH relevance gate
+                                          │ (on-purpose papers)
+                                          ▼
+                              Claude authenticator
+                         (fetch REAL abstract → verify)
+                          │          │           │
+                    AUTHENTICATED  REJECTED   UNVERIFIED
+                          │          │           │
+                       graded     dropped    kept + flagged
+                                          ▼
+                          grade tiers → compiled evidence sheet</div>
+    <p class="note">With no API key set, the authenticator is bypassed and the pipeline falls back to the deterministic MeSH relevance gate.</p>
+  </section>
+
+  <!-- ANALYZE -->
+  <section id="analyze">
+    <h2>Analyze a formulation</h2>
+    <p class="lead">Enter your product. It runs live against PubMed and (if enabled) authenticates with Claude.</p>
+
+    <div class="two">
+      <div><label>Product name</label><input id="pname" placeholder="e.g. TurmaMax Joint Support"></div>
+      <div><label>Product category — drives the relevance gate</label>
+        <input id="pcat" list="cats" placeholder="e.g. anti-inflammatory">
+        <datalist id="cats">
+          <option value="laxative"><option value="anti-inflammatory">
+          <option value="hepatoprotective"><option value="digestive">
+        </datalist>
+      </div>
+    </div>
+    <div class="two">
+      <div><label>Target market</label>
+        <select id="pmarket"><option>US</option><option>EU</option><option>IN</option></select>
+      </div>
+      <div><label>Dosage form</label><input id="pform" placeholder="capsule / powder / syrup"></div>
+    </div>
+
+    <h3>Ingredients</h3>
+    <div id="ings"></div>
+    <button class="btn secondary" id="addIng" type="button">+ Add ingredient</button>
+
+    <h3>Marketed claims</h3>
+    <div id="claims"></div>
+    <button class="btn secondary" id="addClaim" type="button">+ Add claim</button>
+
+    <div class="toolbar">
+      <button class="btn" id="runBtn">Run analysis</button>
+      <label class="switch"><input type="checkbox" id="useAuth" checked> Authenticate with Claude</label>
+      <button class="btn secondary" id="loadSample" type="button">Load sample</button>
+      <span id="status" class="note"></span>
+    </div>
+    <p class="note">A live run makes several PubMed searches per ingredient plus Claude calls — expect 30–90 seconds.</p>
+
+    <div id="results"></div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="history">
+    <h2>History &amp; comparison</h2>
+    <p class="lead">Every analysis you run is saved in this browser. Compare products side by side, reopen a past outcome, or export it.</p>
+    <div class="toolbar" style="margin-top:0">
+      <button class="btn secondary" id="clearHist" type="button">Clear history</button>
+      <span class="note">Stored locally in your browser only — nothing leaves this machine.</span>
+    </div>
+    <div id="histEmpty" class="card note">No analyses yet. Run one from the <strong>Analyze</strong> tab.</div>
+    <div id="compareWrap" style="overflow-x:auto"></div>
+    <div id="histList"></div>
+  </section>
+</main>
+
+<script>
+const AGENTS = [
+  ["1","Orchestrator","Initializes shared state and runs the five specialists — three in parallel, two on merge — wiring in the PubMed, ChEMBL and ClinicalTrials sources."],
+  ["2","Label Dissector","Records only what the label/CoA states. Unstated dose or standardization becomes an explicit gap, never a guessed value."],
+  ["3","Bioavailability","Searches PubMed for pharmacokinetic data; reports only study-derived figures with their caveats (no invented multipliers)."],
+  ["4","Clinical Verifier","Per-ingredient, relevance-gated search. A claim is asserted only where a paper genuinely supports it; off-target papers are logged, not counted."],
+  ["5","Scriptural","Records traditional Ayurvedic use as historical practice — explicitly not an efficacy claim — and never fabricates pharmacopoeia citations."],
+  ["6","Regulatory","Flags disease/treatment claims and claims above their evidence; surfaces queried safety and compounding interaction risks; adds the market frame."],
+];
+
+// nav
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById(b.dataset.tab).classList.add('active');
+});
+
+// agents
+document.getElementById('agents').innerHTML = AGENTS.map(([n,t,d]) =>
+  `<div class="agent"><span class="n">${n}</span><h4>${t}</h4><p>${d}</p></div>`).join('');
+
+// health badge
+fetch('/api/health').then(r => r.json()).then(h => {
+  const b = document.getElementById('authBadge');
+  if (h.auth_available) { b.textContent = 'Claude auth ON · ' + h.model; b.className = 'badge on'; }
+  else { b.textContent = 'Claude auth OFF · deterministic gate'; b.className = 'badge off'; document.getElementById('useAuth').checked = false; }
+}).catch(() => {});
+
+// dynamic rows
+function ingRow(v = {}) {
+  const d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = `
+    <div><label>Name</label><input class="i-name" value="${v.name||''}" placeholder="Turmeric extract"></div>
+    <div><label>Latin name</label><input class="i-latin" value="${v.latin_name||''}" placeholder="Curcuma longa"></div>
+    <div><label>Dose</label><input class="i-dose" value="${v.stated_dose||''}" placeholder="500 mg"></div>
+    <div><label>Standardization</label><input class="i-std" value="${v.stated_standardization||''}" placeholder="95% curcuminoids"></div>
+    <button class="del" title="Remove">✕</button>`;
+  d.querySelector('.del').onclick = () => d.remove();
+  return d;
+}
+function claimRow(v = '') {
+  const d = document.createElement('div'); d.className = 'row'; d.style.gridTemplateColumns = '1fr auto';
+  d.innerHTML = `<div><input class="c-text" value="${v.replace(/"/g,'&quot;')}" placeholder="e.g. supports joint comfort"></div><button class="del">✕</button>`;
+  d.querySelector('.del').onclick = () => d.remove();
+  return d;
+}
+document.getElementById('addIng').onclick = () => document.getElementById('ings').appendChild(ingRow());
+document.getElementById('addClaim').onclick = () => document.getElementById('claims').appendChild(claimRow());
+
+function loadSample() {
+  document.getElementById('pname').value = 'TurmaMax Joint Support';
+  document.getElementById('pcat').value = 'anti-inflammatory';
+  document.getElementById('pmarket').value = 'US';
+  document.getElementById('pform').value = 'capsule';
+  const ings = document.getElementById('ings'); ings.innerHTML = '';
+  ings.appendChild(ingRow({name:'Turmeric extract',latin_name:'Curcuma longa',stated_dose:'500 mg',stated_standardization:'95% curcuminoids'}));
+  ings.appendChild(ingRow({name:'Black pepper extract',latin_name:'Piper nigrum',stated_dose:'5 mg'}));
+  const cl = document.getElementById('claims'); cl.innerHTML = '';
+  ['joint comfort','cures arthritis','anti-inflammatory support'].forEach(c => cl.appendChild(claimRow(c)));
+}
+document.getElementById('loadSample').onclick = loadSample;
+
+// seed one empty row each
+document.getElementById('ings').appendChild(ingRow());
+document.getElementById('claims').appendChild(claimRow());
+
+// tiny markdown renderer for the report (headers, tables, bold, lists, bq, hr)
+function md(src) {
+  const lines = src.split('\n'); let html = ''; let i = 0;
+  const inline = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>');
+  while (i < lines.length) {
+    let l = lines[i];
+    if (/^\|(.+)\|$/.test(l) && i+1 < lines.length && /^\|[-:\s|]+\|$/.test(lines[i+1])) {
+      const head = l.slice(1,-1).split('|').map(c=>c.trim());
+      i += 2; let rows = [];
+      while (i < lines.length && /^\|(.+)\|$/.test(lines[i])) { rows.push(lines[i].slice(1,-1).split('|').map(c=>c.trim())); i++; }
+      html += '<table><thead><tr>' + head.map(h=>`<th>${inline(h)}</th>`).join('') + '</tr></thead><tbody>' +
+        rows.map(r=>'<tr>'+r.map(c=>`<td>${inline(c)}</td>`).join('')+'</tr>').join('') + '</tbody></table>';
+      continue;
+    }
+    if (/^#{1,6}\s/.test(l)) { const n=l.match(/^#+/)[0].length; html += `<h${n}>${inline(l.replace(/^#+\s/,''))}</h${n}>`; i++; continue; }
+    if (/^>\s?/.test(l)) { html += `<blockquote>${inline(l.replace(/^>\s?/,''))}</blockquote>`; i++; continue; }
+    if (/^---+$/.test(l)) { html += '<hr>'; i++; continue; }
+    if (/^[-*]\s/.test(l)) { let items=''; while(i<lines.length && /^[-*]\s/.test(lines[i])){items+=`<li>${inline(lines[i].replace(/^[-*]\s/,''))}</li>`;i++;} html+=`<ul>${items}</ul>`; continue; }
+    if (l.trim()==='') { i++; continue; }
+    html += `<p>${inline(l)}</p>`; i++;
+  }
+  return html;
+}
+
+function tierClass(rank) { return 't' + rank; }
+
+async function run() {
+  const btn = document.getElementById('runBtn'), status = document.getElementById('status');
+  const ings = [...document.querySelectorAll('#ings .row')].map(r => ({
+    name: r.querySelector('.i-name').value, latin_name: r.querySelector('.i-latin').value,
+    stated_dose: r.querySelector('.i-dose').value, stated_standardization: r.querySelector('.i-std').value,
+  })).filter(x => x.name.trim());
+  const claims = [...document.querySelectorAll('#claims .c-text')].map(c => c.value).filter(x => x.trim());
+  if (!ings.length) { alert('Add at least one ingredient with a name.'); return; }
+
+  const payload = {
+    product_name: document.getElementById('pname').value,
+    product_category: document.getElementById('pcat').value,
+    target_market: document.getElementById('pmarket').value,
+    dosage_form: document.getElementById('pform').value,
+    ingredients: ings, claimed_benefits: claims,
+    use_auth: document.getElementById('useAuth').checked,
+  };
+
+  btn.disabled = true; status.innerHTML = '<span class="spinner"></span> Running live PubMed + authentication…';
+  document.getElementById('results').innerHTML = '';
+  try {
+    const res = await fetch('/api/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    data.analyzed_at = new Date().toISOString();
+    saveToHistory(data);
+    render(data);
+    status.textContent = 'Done.';
+  } catch (e) {
+    document.getElementById('results').innerHTML = `<div class="err">${e.message}</div>`;
+    status.textContent = '';
+  } finally { btn.disabled = false; }
+}
+document.getElementById('runBtn').onclick = run;
+
+let LAST = null;
+
+function render(d, opts = {}) {
+  LAST = d;
+  let h = '';
+  h += `<div class="card"><div class="h" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+    <strong style="font-size:1.1rem">${d.product_name}</strong>
+    <span class="tier">${d.category}</span><span class="tier">${d.target_market}</span>
+    <span class="pill ${d.auth_enabled?'ok':'warn'}">${d.auth_enabled?'Claude-authenticated':(d.auth_requested?'Auth requested but key missing':'Deterministic only')}</span>
+    <span style="margin-left:auto;display:flex;gap:.4rem">
+      <button class="btn secondary" onclick="exportPdf()" style="padding:.4rem .8rem;font-size:.82rem">⬇ PDF</button>
+      <button class="btn secondary" onclick="exportHtml()" style="padding:.4rem .8rem;font-size:.82rem">⬇ HTML</button>
+      <button class="btn secondary" onclick="exportMd()" style="padding:.4rem .8rem;font-size:.82rem">⬇ Markdown</button>
+    </span>
+  </div>${d.analyzed_at?`<div class="note" style="margin-top:.4rem">Analyzed ${new Date(d.analyzed_at).toLocaleString()}</div>`:''}</div>`;
+
+  // per-ingredient tiers
+  h += '<h3>Per-ingredient evidence</h3><div class="grid">';
+  d.per_ingredient.forEach(p => {
+    h += `<div class="agent"><div style="display:flex;justify-content:space-between;gap:.5rem;align-items:center">
+      <strong>${p.name}</strong><span class="tier ${tierClass(p.tier_rank)}">${p.tier}</span></div>
+      <p style="margin-top:.4rem">${p.latin_name?('<em>'+p.latin_name+'</em>'):''}</p>
+      ${p.citations.length?('<div class="note" style="margin-top:.4rem">'+p.citations.length+' citation(s)</div>'):'<div class="note" style="margin-top:.4rem">No on-purpose citation</div>'}
+      ${p.notes.length?('<details><summary>'+p.notes.length+' note(s)</summary>'+p.notes.map(n=>`<div class="finding">• ${n}</div>`).join('')+'</details>'):''}
+    </div>`;
+  });
+  h += '</div>';
+
+  // pharmacology & candidate pathways
+  if (d.pharmacology && d.pharmacology.length) {
+    const anyData = d.pharmacology.some(e => (e.candidates && e.candidates.length) || e.compound);
+    if (anyData) {
+      h += '<h3>Pharmacology &amp; candidate pathways <span class="note" style="font-weight:400">— context, not efficacy</span></h3>';
+      h += '<div class="card note" style="border-left:3px solid var(--accent2)">Candidate pathways come from PubChem (WikiPathways / Reactome / PathBank) for the <strong>isolated marker compound</strong>. Each is verified against PubMed + Claude. Even VERIFIED pathways are capped at preclinical — mechanistic context, <strong>not</strong> evidence of a human clinical effect, and not specific to this product’s dose.</div>';
+      d.pharmacology.forEach(e => {
+        h += `<div class="agent"><div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <strong>${e.ingredient}</strong>
+          ${e.compound?`<span class="tier">${e.compound}${e.cid?(' · CID '+e.cid):''}</span>`:''}
+          ${e.identity&&e.identity.MolecularFormula?`<span class="note">${e.identity.MolecularFormula} · MW ${e.identity.MolecularWeight}</span>`:''}
+        </div>`;
+        if (e.note) h += `<div class="finding" style="margin-top:.3rem">${e.note}</div>`;
+        (e.candidates||[]).forEach(c => {
+          const vc = c.verdict==='VERIFIED'?'ok':(c.verdict==='DB_ONLY'?'warn':'warn');
+          h += `<div class="authrow ${c.verdict==='VERIFIED'?'pass':''}" style="margin-top:.4rem">
+            <div class="h"><span class="pill ${vc}">${c.verdict.replace('_',' ')}</span>
+              <strong>${c.name}</strong><span class="tier">${c.source}</span>
+              <span class="tier">${c.tier}</span>${c.citation?`<a href="https://pubmed.ncbi.nlm.nih.gov/${c.citation.replace('PMID:','')}/" target="_blank" class="muted">${c.citation}</a>`:''}
+            </div>${c.finding?`<div class="finding">${c.finding}</div>`:''}</div>`;
+        });
+        h += '</div>';
+      });
+    }
+  }
+
+  // authentication log
+  if (d.authentication_log.length) {
+    h += '<h3>Claude authentication log</h3>';
+    d.authentication_log.forEach(a => {
+      h += `<div class="authrow ${a.passed?'pass':'fail'}">
+        <div class="h"><span class="pill ${a.verdict}">${a.verdict}</span>
+          <strong>${a.ingredient}</strong>
+          <a href="https://pubmed.ncbi.nlm.nih.gov/${a.pmid}/" target="_blank" class="muted">PMID:${a.pmid}</a>
+          <span class="tier">${a.evidence_level}${a.species_or_model?(' · '+a.species_or_model):''}</span>
+        </div>
+        ${a.actual_finding?`<div class="finding">${a.actual_finding}</div>`:''}
+        ${a.reasoning?`<details><summary>reasoning</summary><div class="finding">${a.reasoning}</div></details>`:''}
+      </div>`;
+    });
+  }
+
+  // flags
+  if (d.regulatory_flags.length || d.formulation_flags.length) {
+    h += '<h3>Flags</h3>';
+    d.regulatory_flags.forEach(f => h += `<div class="authrow fail"><div class="finding">⚖️ ${f}</div></div>`);
+    d.formulation_flags.forEach(f => h += `<div class="authrow" style="border-left-color:var(--warn)"><div class="finding">⚠️ ${f}</div></div>`);
+  }
+
+  // full report
+  h += '<h3>Full evidence sheet</h3><div class="report">' + md(d.report_markdown) + '</div>';
+  document.getElementById('results').innerHTML = h;
+}
+
+// ---------- Export ----------
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function slug(s) { return (s || 'dossier').replace(/[^\w]+/g, '_').slice(0, 60); }
+
+function exportMd() {
+  if (!LAST) return;
+  download(`Dossier_${slug(LAST.product_name)}.md`, LAST.report_markdown, 'text/markdown');
+}
+
+function buildExportHtml(d, forPrint) {
+  const authRows = (d.authentication_log || []).map(a =>
+    `<tr><td>${a.ingredient}</td><td>${a.pmid}</td><td class="v ${a.verdict}">${a.verdict}</td>
+     <td>${a.evidence_level||''} ${a.species_or_model?('· '+a.species_or_model):''}</td>
+     <td>${(a.actual_finding||'').replace(/</g,'&lt;')}</td></tr>`).join('');
+  const ingRows = (d.per_ingredient || []).map(p =>
+    `<tr><td><b>${p.name}</b> <span class="mut">${p.latin_name||''}</span></td><td>${p.tier}</td>
+     <td>${p.citations.join('<br>')||'—'}</td></tr>`).join('');
+  const flags = [...(d.regulatory_flags||[]).map(f=>`<li class="reg">⚖️ ${f}</li>`),
+                 ...(d.formulation_flags||[]).map(f=>`<li class="saf">⚠️ ${f}</li>`)].join('');
+  const pharmaRows = (d.pharmacology||[]).flatMap(e =>
+    (e.candidates||[]).map(c =>
+      `<tr><td>${e.ingredient}${e.compound?(' <span class="mut">('+e.compound+')</span>'):''}</td>
+       <td>${c.name}</td><td>${c.source}</td><td class="v ${c.verdict==='VERIFIED'?'AUTHENTICATED':'UNVERIFIED'}">${c.verdict.replace('_',' ')}</td>
+       <td>${c.tier}</td></tr>`)).join('');
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Dossier — ${d.product_name}</title><style>
+  body{font:14px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;margin:2rem auto;padding:0 1.5rem;color:#1e293b}
+  h1{font-size:1.5rem;margin-bottom:.2rem} .sub{color:#64748b;margin-bottom:1.5rem}
+  h2{font-size:1.1rem;border-bottom:2px solid #e2e8f0;padding-bottom:.3rem;margin-top:2rem}
+  table{width:100%;border-collapse:collapse;font-size:.85rem;margin:.6rem 0}
+  th,td{border:1px solid #e2e8f0;padding:.45rem .6rem;text-align:left;vertical-align:top}
+  th{background:#f1f5f9} .mut{color:#94a3b8} .pill{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.75rem;font-weight:700}
+  .v.AUTHENTICATED{color:#16a34a}.v.PARTIAL{color:#7c3aed}.v.REJECTED,.v.FABRICATED{color:#dc2626}.v.UNVERIFIED{color:#d97706}
+  ul{padding-left:1.1rem} li.reg{color:#b91c1c}li.saf{color:#b45309}
+  blockquote{border-left:3px solid #14b8a6;margin:.6rem 0;padding:.3rem .8rem;color:#475569;background:#f8fafc}
+  footer{margin-top:3rem;padding-top:1rem;border-top:1px solid #e2e8f0;font-size:.75rem;color:#94a3b8}
+  @page{margin:1.4cm}
+  @media print{body{margin:0;max-width:none}h2{break-after:avoid}table,tr{break-inside:avoid}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<h1>Evidence &amp; Regulatory Dossier — ${d.product_name}</h1>
+<div class="sub">Category: <b>${d.category}</b> · Market: <b>${d.target_market}</b> ·
+  ${d.auth_enabled?'Claude-authenticated':'Deterministic gate'} · Generated ${new Date(d.analyzed_at||Date.now()).toLocaleString()}</div>
+<h2>Per-ingredient evidence</h2><table><thead><tr><th>Ingredient</th><th>Evidence tier</th><th>On-purpose citations</th></tr></thead><tbody>${ingRows}</tbody></table>
+${pharmaRows?`<h2>Pharmacology &amp; candidate pathways <span style="font-size:.7rem;font-weight:400">(context, not efficacy — capped at preclinical)</span></h2><table><thead><tr><th>Ingredient (marker)</th><th>Candidate pathway</th><th>Source</th><th>Verdict</th><th>Tier</th></tr></thead><tbody>${pharmaRows}</tbody></table>`:''}
+${authRows?`<h2>Claude authentication log</h2><table><thead><tr><th>Ingredient</th><th>PMID</th><th>Verdict</th><th>Evidence level</th><th>Actual finding</th></tr></thead><tbody>${authRows}</tbody></table>`:''}
+${flags?`<h2>Flags</h2><ul>${flags}</ul>`:''}
+<h2>Full evidence sheet</h2>${md(d.report_markdown)}
+<footer>Dossier Engine — informational research tool, not medical or regulatory certification. Evidence retrieved from PubMed; attribute accordingly.</footer>
+${forPrint ? '<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>' : ''}
+</body></html>`;
+  return html;
+}
+
+function exportHtml() {
+  if (!LAST) return;
+  download(`Dossier_${slug(LAST.product_name)}.html`, buildExportHtml(LAST, false), 'text/html');
+}
+
+function exportPdf() {
+  if (!LAST) return;
+  // Open a print-optimized window; the browser's print dialog offers
+  // "Save as PDF" on every platform. No server-side library needed.
+  const w = window.open('', '_blank');
+  if (!w) { alert('Please allow pop-ups to export PDF, or use Export HTML then print to PDF.'); return; }
+  w.document.write(buildExportHtml(LAST, true));
+  w.document.close();
+}
+
+// ---------- History (localStorage) ----------
+const HKEY = 'dossier_history_v1';
+function getHistory() { try { return JSON.parse(localStorage.getItem(HKEY) || '[]'); } catch { return []; } }
+function setHistory(list) { localStorage.setItem(HKEY, JSON.stringify(list)); renderHistory(); }
+function saveToHistory(d) {
+  const list = getHistory();
+  list.unshift(d);
+  setHistory(list.slice(0, 25)); // keep last 25
+}
+document.getElementById('clearHist').onclick = () => { if (confirm('Clear all saved analyses?')) setHistory([]); };
+
+function tierRankColor(rank) { return rank>=4?'var(--ok)':rank===3?'var(--warn)':'var(--muted)'; }
+
+function renderHistory() {
+  const list = getHistory();
+  document.getElementById('histCount').textContent = list.length;
+  document.getElementById('histEmpty').style.display = list.length ? 'none' : 'block';
+
+  // comparison matrix: products as columns, top-line metrics as rows
+  const cmp = document.getElementById('compareWrap');
+  if (list.length >= 2) {
+    const cols = list.slice(0, 6);
+    const bestTier = d => Math.max(0, ...d.per_ingredient.map(p => p.tier_rank));
+    const authPass = d => (d.authentication_log||[]).filter(a=>a.passed).length;
+    const authRej = d => (d.authentication_log||[]).filter(a=>!a.passed && a.verdict!=='UNVERIFIED').length;
+    const row = (label, fn) => `<tr><td class="mut">${label}</td>${cols.map(d=>`<td>${fn(d)}</td>`).join('')}</tr>`;
+    cmp.innerHTML = `<h3>Compare (most recent ${cols.length})</h3>
+      <table class="report" style="display:table;width:100%">
+      <thead><tr><th></th>${cols.map(d=>`<th>${d.product_name}</th>`).join('')}</tr></thead><tbody>
+      ${row('Category', d=>d.category)}
+      ${row('Market', d=>d.target_market)}
+      ${row('Ingredients', d=>d.per_ingredient.length)}
+      ${row('Best evidence tier', d=>`<span style="color:${tierRankColor(bestTier(d))}">${(d.per_ingredient.find(p=>p.tier_rank===bestTier(d))||{}).tier||'—'}</span>`)}
+      ${row('Claude authenticated', d=>authPass(d))}
+      ${row('Claude rejected', d=>`<span style="color:var(--bad)">${authRej(d)}</span>`)}
+      ${row('Regulatory flags', d=>`<span style="color:var(--bad)">${(d.regulatory_flags||[]).length}</span>`)}
+      </tbody></table>`;
+  } else { cmp.innerHTML = ''; }
+
+  // list with reopen / export
+  document.getElementById('histList').innerHTML = list.map((d, idx) => {
+    const passed = (d.authentication_log||[]).filter(a=>a.passed).length;
+    const rej = (d.authentication_log||[]).filter(a=>!a.passed && a.verdict!=='UNVERIFIED').length;
+    return `<div class="card"><div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+      <strong>${d.product_name}</strong>
+      <span class="tier">${d.category}</span>
+      <span class="pill ${d.auth_enabled?'ok':'warn'}">${d.auth_enabled?'authenticated':'deterministic'}</span>
+      <span class="note">${passed} passed · ${rej} rejected · ${(d.regulatory_flags||[]).length} flags</span>
+      <span class="note">${new Date(d.analyzed_at).toLocaleString()}</span>
+      <span style="margin-left:auto;display:flex;gap:.4rem">
+        <button class="btn secondary" style="padding:.35rem .7rem;font-size:.8rem" onclick="reopen(${idx})">Reopen</button>
+        <button class="btn secondary" style="padding:.35rem .7rem;font-size:.8rem" onclick="histPdf(${idx})">PDF</button>
+        <button class="del" onclick="delHist(${idx})">✕</button>
+      </span></div></div>`;
+  }).join('');
+}
+function reopen(idx) {
+  const d = getHistory()[idx]; if (!d) return;
+  document.querySelector('nav button[data-tab="analyze"]').click();
+  render(d);
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+}
+function delHist(idx) {
+  const list = getHistory(); list.splice(idx, 1); setHistory(list);
+}
+function histPdf(idx) {
+  const d = getHistory()[idx]; if (!d) return;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Please allow pop-ups to export PDF.'); return; }
+  w.document.write(buildExportHtml(d, true)); w.document.close();
+}
+renderHistory();
+</script>
+</body>
+</html>

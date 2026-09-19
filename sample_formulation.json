@@ -1,0 +1,26 @@
+{
+  "product_name": "TurmaMax Joint Support",
+  "product_category": "anti-inflammatory",
+  "target_market": "US",
+  "dosage_form": "capsule",
+  "serving_size_g": 1.0,
+  "claimed_benefits": [
+    "joint comfort",
+    "cures arthritis",
+    "anti-inflammatory support"
+  ],
+  "ingredients": [
+    {
+      "name": "Turmeric extract",
+      "latin_name": "Curcuma longa",
+      "stated_dose": "500 mg",
+      "stated_standardization": "95% curcuminoids"
+    },
+    {
+      "name": "Black pepper extract",
+      "latin_name": "Piper nigrum",
+      "stated_dose": "5 mg",
+      "stated_standardization": null
+    }
+  ]
+}
