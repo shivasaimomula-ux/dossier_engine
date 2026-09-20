@@ -35,6 +35,33 @@ from .authenticator import ClaudeAuthenticator
 PORT = int(os.environ.get("PORT", "8010"))
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
+# Base Desktop tree is keyword-only for safety §3 — never pipeline-ready.
+_QUARANTINE_BANNER = (
+    "QUARANTINED: this Desktop base dossier_engine cites safety PMIDs without "
+    "Claude adjudication. Use ~/Desktop/dossier_engine-harden-c for pipeline C."
+)
+
+
+def _pipeline_mode_requested() -> bool:
+    for key in ("PIPELINE_MODE", "DOSSIER_PIPELINE"):
+        if os.environ.get(key, "").strip().lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
+def _health_payload(auth) -> dict:
+    """Health body that glue must reject (no safety_adjudication=required)."""
+    return {
+        "ok": True,
+        "auth_available": bool(auth.available),
+        "model": auth.model,
+        "safety_adjudication": "absent",
+        "pipeline_ready": False,
+        "quarantined": True,
+        "build": "desktop-base",
+        "message": _QUARANTINE_BANNER,
+    }
+
 
 class _NoChembl:
     def lookup(self, name):
@@ -166,11 +193,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/health":
             auth = ClaudeAuthenticator()
-            self._send(200, json.dumps({
-                "ok": True,
-                "auth_available": auth.available,
-                "model": auth.model,
-            }))
+            self._send(200, json.dumps(_health_payload(auth)))
             return
         self._send(404, "Not found")
 
@@ -195,12 +218,27 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
+    print(f"\n*** {_QUARANTINE_BANNER} ***\n", file=sys.stderr)
+    if _pipeline_mode_requested():
+        print(
+            "REFUSED: PIPELINE_MODE / DOSSIER_PIPELINE is set. "
+            "Start harden-C instead:\n"
+            "  cd ~/Desktop/dossier_engine-harden-c && "
+            "python -m dossier_engine.webserver\n",
+            file=sys.stderr,
+        )
+        return 2
+
     auth = ClaudeAuthenticator()
-    state = (f"Claude authentication ENABLED ({auth.model})"
-             if auth.available else
-             "Claude authentication DISABLED (no ANTHROPIC_API_KEY) — "
-             "deterministic MeSH gate only")
-    print(f"\nDossier Engine platform  •  {state}")
+    state = (
+        f"Claude authentication ENABLED ({auth.model})"
+        if auth.available
+        else "Claude authentication DISABLED (no ANTHROPIC_API_KEY) — "
+        "deterministic MeSH gate only"
+    )
+    print(f"Dossier Engine platform (BASE / QUARANTINED)  •  {state}")
+    print("  safety_adjudication=absent  pipeline_ready=false")
+    print("  Local exploration only — not for glue / export-trust runs.")
     print(f"Open  http://localhost:{PORT}\n")
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     try:

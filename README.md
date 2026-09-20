@@ -1,5 +1,14 @@
 # Honest Clinical & Regulatory Evidence Engine
 
+> ## QUARANTINED — not for pipeline use
+>
+> This **base** Desktop tree ships **keyword-only** safety citations (no Claude
+> adjudication on §3). Do **not** point Herbenzo glue or operators here.
+>
+> **Use instead:** `~/Desktop/dossier_engine-harden-c`  
+> See [QUARANTINED.md](./QUARANTINED.md). Local exploration only; set
+> `PIPELINE_MODE=1` and the server will refuse to start.
+
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /
 specialist topology from the original spec, but its defining rule is:

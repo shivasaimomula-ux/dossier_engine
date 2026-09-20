@@ -158,6 +158,22 @@ class _NoChembl:
 
 
 def main(argv=None) -> int:
+    import os
+
+    print(
+        "WARNING: QUARANTINED base tree — safety §3 is keyword-only. "
+        "Use ~/Desktop/dossier_engine-harden-c for pipeline C.",
+        file=sys.stderr,
+    )
+    if os.environ.get("PIPELINE_MODE", "").strip().lower() in ("1", "true", "yes") or \
+       os.environ.get("DOSSIER_PIPELINE", "").strip().lower() in ("1", "true", "yes"):
+        print(
+            "REFUSED: PIPELINE_MODE / DOSSIER_PIPELINE set on quarantined base C. "
+            "cd ~/Desktop/dossier_engine-harden-c instead.",
+            file=sys.stderr,
+        )
+        return 2
+
     parser = argparse.ArgumentParser(
         prog="python -m dossier_engine",
         description="Honest evidence engine — run on a JSON formulation.",
