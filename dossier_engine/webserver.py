@@ -11,8 +11,9 @@ Runs on Python's stdlib http.server (no web framework). Start with:
     python -m dossier_engine.webserver      # then open http://localhost:8010
 
 The /api/analyze endpoint runs the full live pipeline (PubMed + Claude
-authentication when ANTHROPIC_API_KEY is set) and returns both the compiled
-report and a structured summary the frontend renders as cards.
+authentication when ANTHROPIC_API_KEY is set) and returns the compiled
+markdown report, a structured summary the frontend renders as cards, and a
+versioned herbenzo-contracts ``Dossier`` JSON (Task T7) for Stage E / glue.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from .nodes import LabelDissector, ScripturalNode, RegulatoryNode
 from .nodes_v2 import PerIngredientVerifier, SafetyQueryNode
 from .pharmacology import MechanismDiscoveryNode
 from .compiler_v2 import compile_v2
+from .dossier_emit import build_dossier, dossier_to_wire
 from .sources import PubMedClient, PubChemClient, SourceResult
 from .authenticator import ClaudeAuthenticator
 from .pipeline_health import build_health_payload
@@ -42,13 +44,11 @@ class _NoChembl:
         return SourceResult.empty("ChEMBL")
 
 
-def _build_formulation(payload: dict) -> FormulationInput:
+def _build_formulation(payload: dict):
     # Task T6 — shared-contract inbound gate (reject unknown fields / bad schema).
     from .contract_gate import validate_inbound_formulation
 
     validated = validate_inbound_formulation(payload)
-    # B Modernizer skipped — modernized_sku may be absent or null.
-    _ = validated.modernized_sku
     ingredients = [
         Ingredient(
             name=i.name,
@@ -60,7 +60,7 @@ def _build_formulation(payload: dict) -> FormulationInput:
         )
         for i in validated.ingredients
     ]
-    return FormulationInput(
+    formulation = FormulationInput(
         product_name=validated.product_name,
         ingredients=ingredients,
         claimed_benefits=list(validated.claimed_benefits),
@@ -69,10 +69,11 @@ def _build_formulation(payload: dict) -> FormulationInput:
         product_category=validated.product_category or "",
         serving_size_g=validated.serving_size_g,
     )
+    return formulation, validated
 
 
 def _analyze(payload: dict) -> dict:
-    formulation = _build_formulation(payload)
+    formulation, validated = _build_formulation(payload)
     use_auth = payload.get("use_auth", True)
 
     pubmed = PubMedClient(hydrate_full=True)
@@ -133,6 +134,21 @@ def _analyze(payload: dict) -> dict:
         for ing, rec in state.queried_safety
     ]
 
+    # Task T7 — versioned structured Dossier (markdown remains for humans).
+    dossier = build_dossier(
+        state,
+        report_md,
+        confidence=getattr(validated, "confidence", None),
+        inherited_confidence=getattr(validated, "inherited_confidence", None),
+        confidence_floor=getattr(validated, "confidence_floor", None),
+        modernized_sku_present=validated.modernized_sku is not None,
+        source_sku_id=(
+            validated.modernized_sku.get("sku_id")
+            if isinstance(validated.modernized_sku, dict)
+            else None
+        ),
+    )
+
     return {
         "product_name": formulation.product_name,
         "category": formulation.product_category or "general",
@@ -140,6 +156,7 @@ def _analyze(payload: dict) -> dict:
         "auth_enabled": auth_enabled,
         "auth_requested": bool(use_auth),
         "report_markdown": report_md,
+        "dossier": dossier_to_wire(dossier),
         "per_ingredient": per_ingredient,
         "safety": safety,
         "pharmacology": state.pharmacology,

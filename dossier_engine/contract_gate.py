@@ -1,7 +1,8 @@
 """HTTP/CLI contract gate for Stage C FormulationInput inbound (Task T6).
 
-Does not emit structured Dossier (Task T7). Validates the classical/label
-FormulationInput stub via herbenzo-contracts and rejects unknown fields.
+Outbound structured Dossier emit lives in ``dossier_emit`` (Task T7).
+Validates the classical/label FormulationInput stub via herbenzo-contracts
+and rejects unknown fields.
 """
 
 from __future__ import annotations
