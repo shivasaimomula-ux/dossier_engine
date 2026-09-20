@@ -22,8 +22,8 @@ from typing import Optional, Callable
 from .state import GraphState, Ingredient
 from .guardrails import (
     EvidenceRecord, EvidenceTier, Citation,
-    grade_pubmed_hits, relevance_filter, RelevanceStatus,
-    ClaimEvidenceLink, is_retracted,
+    grade_pubmed_hits, relevance_filter, safety_relevance_filter,
+    RelevanceStatus, ClaimEvidenceLink, is_retracted,
 )
 from .sources import PubMedClient, SourceResult
 from .authenticator import ClaudeAuthenticator, AuthResult
@@ -246,22 +246,33 @@ class SafetyQueryNode:
 
     Query pattern: "{ingredient}" AND (adverse effects OR drug interactions
                     OR toxicity OR contraindications)
+
+    Trust path (same stack as efficacy, fail-closed for §3 cites):
+      1) PubMed keyword search + retraction drop
+      2) MeSH/title safety relevance gate (safety_relevance_filter)
+      3) ClaudeAuthenticator on on-purpose hits (when available)
+      4) Only AUTHENTICATED / PARTIAL (passed) PMIDs become §3 citations
+
+    Fail-closed (unlike efficacy soft-retain): rejected OR unverified
+    (no key / transient auth error) safety PMIDs are NEVER printed as
+    clean citations. Keyword-only PubMed hits without adjudication do
+    not ship. Empty / unverified → honest gap, not clearance.
     """
 
-    def __init__(self, pubmed: PubMedClient):
+    def __init__(self, pubmed: PubMedClient,
+                 authenticator: Optional[ClaudeAuthenticator] = None):
         self.pubmed = pubmed
+        self.authenticator = authenticator
 
     def run(self, state: GraphState) -> None:
         for ing in state.formulation.ingredients:
             name = ing.latin_name or ing.name
+            claim = f"safety/interaction profile of {ing.name}"
             query = (f'"{name}" AND (adverse effects OR drug interactions '
                      f'OR toxicity OR contraindications)')
 
             res = self.pubmed.search(query, max_results=5)
-            rec = EvidenceRecord(
-                subject=ing.name,
-                claim=f"safety/interaction profile of {ing.name}",
-            )
+            rec = EvidenceRecord(subject=ing.name, claim=claim)
 
             if not res.ok:
                 state.note_source_failure("PubMed", f"safety:{ing.name}", res.error or "")
@@ -281,40 +292,148 @@ class SafetyQueryNode:
                 state.queried_safety.append((ing, rec))
                 continue
 
-            rec.tier = grade_pubmed_hits(res.records)
-            # Filter out retracted papers from safety analysis
-            valid_records = [p for p in res.records if not is_retracted(p)]
-            retracted_in_safety = [p for p in res.records if is_retracted(p)]
+            # ----- Stage 1: retraction + safety MeSH/title relevance -----
+            on_purpose = []
+            off_target = []
+            ambiguous = []
+            retracted_in_safety = []
+
+            for paper in res.records:
+                pmid = str(paper.get("pmid", ""))
+                paper_title = paper.get("title", "")
+                if is_retracted(paper):
+                    retracted_in_safety.append(paper)
+                    state.audit_trail.append(ClaimEvidenceLink(
+                        claim=claim, ingredient=ing.name,
+                        query_issued=query, pmid=pmid,
+                        paper_title=paper_title,
+                        relevance=RelevanceStatus.RETRACTED,
+                        linkage_reason="RETRACTED — excluded from safety analysis",
+                    ))
+                    continue
+
+                paper_mesh = set(paper.get("mesh_terms", []))
+                rel = safety_relevance_filter(paper_mesh, paper_title)
+                link = ClaimEvidenceLink(
+                    claim=claim, ingredient=ing.name,
+                    query_issued=query, pmid=pmid,
+                    paper_title=paper_title, relevance=rel,
+                    linkage_reason=_explain_safety_relevance(rel, paper_mesh),
+                )
+                state.audit_trail.append(link)
+
+                if rel == RelevanceStatus.ON_PURPOSE:
+                    on_purpose.append(paper)
+                    link.citation = _make_citation(paper)
+                elif rel == RelevanceStatus.OFF_TARGET:
+                    off_target.append(paper)
+                else:
+                    ambiguous.append(paper)
+
             if retracted_in_safety:
                 rec.add_caveat(
                     f"{len(retracted_in_safety)} RETRACTED paper(s) excluded from "
                     f"safety analysis: "
                     + ", ".join(f"PMID:{p.get('pmid')}" for p in retracted_in_safety)
                 )
-            if not valid_records:
+            if off_target:
+                rec.add_caveat(
+                    f"{len(off_target)} safety-query hit(s) OFF-TARGET "
+                    f"(not safety/interaction literature): "
+                    + ", ".join(f"PMID:{p.get('pmid')}" for p in off_target)
+                )
+            if ambiguous:
+                rec.add_caveat(
+                    f"{len(ambiguous)} safety-query hit(s) AMBIGUOUS "
+                    f"(held for manual review, not cited in §3)."
+                )
+
+            if not on_purpose:
                 rec.tier = EvidenceTier.NONE
-                rec.add_caveat("All retrieved safety papers were retracted.")
+                if retracted_in_safety and not (off_target or ambiguous):
+                    rec.add_caveat("All retrieved safety papers were retracted.")
+                else:
+                    rec.add_caveat(
+                        "No safety/interaction papers passed the MeSH/title "
+                        "relevance gate. Safety profile NOT assessed — gap, "
+                        "not clearance."
+                    )
                 state.queried_safety.append((ing, rec))
                 continue
-            rec.tier = grade_pubmed_hits(valid_records)
-            for p in valid_records[:3]:
-                rec.add_citation(_make_citation(p))
 
-            # Extract safety-relevant keywords from MeSH for the summary
-            safety_mesh = set()
-            for p in res.records:
-                for m in p.get("mesh_terms", []):
-                    ml = m.lower()
-                    if any(kw in ml for kw in (
-                        "toxicity", "adverse", "hypokalemia", "hypertension",
-                        "drug interactions", "hepatotoxicity", "nephrotoxicity",
-                        "contraindications", "poisoning", "overdose",
-                        "pregnancy", "teratogen", "mutagen",
-                    )):
-                        safety_mesh.add(m)
-            if safety_mesh:
+            # ----- Stage 2: Claude authentication (fail-closed for cites) -----
+            authenticated = []
+            auth_on = bool(self.authenticator and self.authenticator.available)
+
+            if not auth_on:
+                # Fail-closed: keyword/MeSH hits without Claude are NOT §3 cites.
+                rec.tier = EvidenceTier.NONE
                 rec.add_caveat(
-                    f"Safety-relevant MeSH signals: {', '.join(sorted(safety_mesh))}"
+                    f"{len(on_purpose)} on-purpose safety paper(s) retrieved "
+                    f"but NOT cited — Claude authentication is required for "
+                    f"the safety section (fail-closed). Profile NOT cleared. "
+                    f"Held PMIDs: "
+                    + ", ".join(f"PMID:{p.get('pmid')}" for p in on_purpose[:5])
+                )
+                # Still harvest MeSH signals for formulation synthesis flags.
+                _harvest_safety_mesh(rec, on_purpose)
+                state.queried_safety.append((ing, rec))
+                continue
+
+            pairs = [
+                {"pmid": str(p.get("pmid", "")),
+                 "claim": claim,
+                 "ingredient": ing.name}
+                for p in on_purpose
+            ]
+            auth_results = self.authenticator.verify_batch(
+                pairs, category="safety"
+            )
+            state.authentication_log.extend(auth_results)
+
+            for paper, auth in zip(on_purpose, auth_results):
+                if auth.passed:
+                    authenticated.append(paper)
+                    if auth.claim_supported == "partial":
+                        rec.add_caveat(
+                            f"PMID:{auth.pmid} — Claude: PARTIAL safety support. "
+                            f"{auth.reasoning}"
+                        )
+                elif auth.error:
+                    # Fail-closed (unlike efficacy): do NOT soft-retain.
+                    rec.add_caveat(
+                        f"PMID:{auth.pmid} — Claude authentication UNVERIFIED "
+                        f"({auth.error}); omitted from §3 cites (safety "
+                        f"fail-closed). Manual review required."
+                    )
+                else:
+                    detail = auth.reasoning or auth.actual_finding \
+                        or "actual findings do not support this safety claim"
+                    rec.add_caveat(
+                        f"PMID:{auth.pmid} — Claude {auth.verdict_short}: "
+                        f"{detail}"
+                    )
+                    for link in state.audit_trail:
+                        if (link.pmid == str(paper.get("pmid", ""))
+                                and link.claim == claim):
+                            link.relevance = RelevanceStatus.OFF_TARGET
+                            link.linkage_reason = (
+                                f"Claude auth: {auth.verdict_short} — "
+                                f"{auth.actual_finding}"
+                            )
+
+            # ----- Stage 3: grade + cite authenticated papers only -----
+            if authenticated:
+                rec.tier = grade_pubmed_hits(authenticated)
+                for p in authenticated[:3]:
+                    rec.add_citation(_make_citation(p))
+                _harvest_safety_mesh(rec, authenticated)
+            else:
+                rec.tier = EvidenceTier.NONE
+                rec.add_caveat(
+                    "On-purpose safety papers were retrieved, but NONE passed "
+                    "Claude authentication — rejected/unverified PMIDs are "
+                    "omitted from §3. Safety profile NOT cleared."
                 )
 
             state.queried_safety.append((ing, rec))
@@ -411,6 +530,25 @@ def _make_citation(paper: dict) -> Citation:
     )
 
 
+def _harvest_safety_mesh(rec: EvidenceRecord, papers: list) -> None:
+    """Attach safety-relevant MeSH signals as caveats (for synthesis flags)."""
+    safety_mesh = set()
+    for p in papers:
+        for m in p.get("mesh_terms", []):
+            ml = m.lower()
+            if any(kw in ml for kw in (
+                "toxicity", "adverse", "hypokalemia", "hypertension",
+                "drug interactions", "hepatotoxicity", "nephrotoxicity",
+                "contraindications", "poisoning", "overdose",
+                "pregnancy", "teratogen", "mutagen",
+            )):
+                safety_mesh.add(m)
+    if safety_mesh:
+        rec.add_caveat(
+            f"Safety-relevant MeSH signals: {', '.join(sorted(safety_mesh))}"
+        )
+
+
 def _explain_relevance(rel: RelevanceStatus, category: str, mesh: set) -> str:
     if rel == RelevanceStatus.ON_PURPOSE:
         from .guardrails import CATEGORY_MESH
@@ -423,3 +561,15 @@ def _explain_relevance(rel: RelevanceStatus, category: str, mesh: set) -> str:
             return f"Off-target: cancer/in-vitro MeSH ({', '.join(sorted(cancer_overlap))})"
         return "Off-target: no MeSH overlap with product category"
     return "Ambiguous: no category overlap, no clear off-target signal"
+
+
+def _explain_safety_relevance(rel: RelevanceStatus, mesh: set) -> str:
+    if rel == RelevanceStatus.ON_PURPOSE:
+        from .guardrails import SAFETY_MESH
+        overlap = SAFETY_MESH & {m.lower() for m in mesh}
+        if overlap:
+            return f"Safety MeSH / signals: {', '.join(sorted(overlap))}"
+        return "Safety-relevant title or MeSH substring match"
+    elif rel == RelevanceStatus.OFF_TARGET:
+        return "Off-target for safety: cancer/in-vitro without safety MeSH"
+    return "Ambiguous: no safety MeSH/title signal"

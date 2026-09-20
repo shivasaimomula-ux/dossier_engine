@@ -42,6 +42,8 @@ class _NoChembl:
 
 
 def _build_formulation(payload: dict) -> FormulationInput:
+    # B Modernizer skipped — modernized_sku may be absent or null.
+    _ = payload.get("modernized_sku", None)
     raw_ings = payload.get("ingredients", [])
     ingredients = [
         Ingredient(
@@ -56,6 +58,11 @@ def _build_formulation(payload: dict) -> FormulationInput:
     if not ingredients:
         raise ValueError("At least one ingredient with a name is required.")
     claims = [c.strip() for c in payload.get("claimed_benefits", []) if c.strip()]
+    serving = payload.get("serving_size_g")
+    try:
+        serving_size_g = float(serving) if serving is not None and serving != "" else None
+    except (TypeError, ValueError):
+        serving_size_g = None
     return FormulationInput(
         product_name=(payload.get("product_name") or "Unnamed product").strip(),
         ingredients=ingredients,
@@ -63,6 +70,7 @@ def _build_formulation(payload: dict) -> FormulationInput:
         target_market=(payload.get("target_market") or "US").strip(),
         dosage_form=(payload.get("dosage_form") or "").strip() or None,
         product_category=(payload.get("product_category") or "").strip(),
+        serving_size_g=serving_size_g,
     )
 
 
@@ -83,7 +91,7 @@ def _analyze(payload: dict) -> dict:
     LabelDissector().run(state, chembl=_NoChembl())
     PerIngredientVerifier(pubmed, authenticator=auth).run(state)
     MechanismDiscoveryNode(PubChemClient(), pubmed, authenticator=auth).run(state)
-    SafetyQueryNode(pubmed).run(state)
+    SafetyQueryNode(pubmed, authenticator=auth).run(state)
     ScripturalNode().run(state)
     RegulatoryNode().run(state)
 

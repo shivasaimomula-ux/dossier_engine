@@ -100,6 +100,9 @@ def interactive_formulation() -> FormulationInput:
 
 def load_formulation(path: Path) -> FormulationInput:
     data = json.loads(path.read_text(encoding="utf-8"))
+    # B Modernizer is out of scope for this path — accept / ignore
+    # modernized_sku (including null) without requiring it.
+    _ = data.get("modernized_sku", None)
     raw_ings = data.get("ingredients", [])
     if not raw_ings:
         raise ValueError("Formulation must list at least one ingredient.")
@@ -144,7 +147,7 @@ def run(formulation: FormulationInput, use_auth: bool = True) -> GraphState:
     LabelDissector().run(state, chembl=_NoChembl())
     PerIngredientVerifier(pubmed, authenticator=auth).run(state)
     MechanismDiscoveryNode(PubChemClient(), pubmed, authenticator=auth).run(state)
-    SafetyQueryNode(pubmed).run(state)
+    SafetyQueryNode(pubmed, authenticator=auth).run(state)
     ScripturalNode().run(state)
     RegulatoryNode().run(state)
     return state

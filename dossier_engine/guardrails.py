@@ -212,6 +212,17 @@ CANCER_INVITRO_MESH = {
     "mouth neoplasms", "carcinoma, squamous cell",
 }
 
+# MeSH / title signals that a paper is on-purpose for SAFETY queries
+# (adverse effects, interactions, toxicity) — not efficacy.
+SAFETY_MESH = {
+    "drug-related side effects and adverse reactions",
+    "drug interactions", "toxicity", "toxicity tests",
+    "chemical and drug induced liver injury", "hepatotoxicity",
+    "nephrotoxicity", "poisoning", "overdose", "contraindications",
+    "pregnancy", "teratogens", "mutagens", "hypokalemia",
+    "hypertension", "adverse effects", "safety",
+}
+
 
 class RelevanceStatus(enum.Enum):
     ON_PURPOSE = "on_purpose"
@@ -252,6 +263,48 @@ def relevance_filter(
         return RelevanceStatus.ON_PURPOSE
 
     # No overlap, no cancer signal — could be tangential or just poorly tagged.
+    return RelevanceStatus.AMBIGUOUS
+
+
+def safety_relevance_filter(
+    paper_mesh: set,
+    paper_title: str = "",
+) -> RelevanceStatus:
+    """
+    MeSH/title gate for safety/interaction literature.
+
+    A safety PMID must show a safety-relevant MeSH signal (or clear title
+    keywords) before Claude authentication. Keyword PubMed hits alone are
+    not enough to ship under §3.
+    """
+    paper_lower = {m.lower() for m in paper_mesh}
+    title_lower = (paper_title or "").lower()
+
+    # Pure cancer/in-vitro assays without safety MeSH are off-target for
+    # adverse-effect / interaction profiling.
+    if CANCER_INVITRO_MESH & paper_lower and not (SAFETY_MESH & paper_lower):
+        return RelevanceStatus.OFF_TARGET
+
+    mesh_hit = bool(SAFETY_MESH & paper_lower)
+    # Also accept common free-text MeSH fragments / title keywords.
+    title_kws = (
+        "adverse", "toxicity", "toxic", "interaction", "contraindicat",
+        "poison", "overdose", "hepatotox", "nephrotox", "side effect",
+        "safety", "teratogen", "pregnancy",
+    )
+    title_hit = any(k in title_lower for k in title_kws)
+    # Substring match on MeSH (PubMed often uses "X / adverse effects")
+    mesh_substr = any(
+        any(k in m for k in (
+            "adverse", "toxicity", "drug interaction", "poisoning",
+            "contraindicat", "overdose", "hepatotox", "nephrotox",
+            "teratogen", "side effect",
+        ))
+        for m in paper_lower
+    )
+
+    if mesh_hit or mesh_substr or title_hit:
+        return RelevanceStatus.ON_PURPOSE
     return RelevanceStatus.AMBIGUOUS
 
 

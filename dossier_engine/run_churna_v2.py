@@ -138,7 +138,7 @@ def main():
     # Run the improved pipeline
     LabelDissector().run(state, chembl=NoChembl())
     PerIngredientVerifier(pubmed, authenticator=auth).run(state)
-    SafetyQueryNode(pubmed).run(state)
+    SafetyQueryNode(pubmed, authenticator=auth).run(state)
     ScripturalNode().run(state)
     RegulatoryNode().run(state)
 
