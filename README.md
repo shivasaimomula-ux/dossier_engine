@@ -9,6 +9,10 @@
 > Health: `GET /api/health` returns `safety_adjudication: "required"` and
 > `pipeline_ready: true` only when `ANTHROPIC_API_KEY` is wired. Set
 > `PIPELINE_MODE=1` to refuse startup without the key.
+>
+> Trust: `PIPELINE_TRUST=strict` (default) omits UNVERIFIED efficacy PMIDs from
+> compiled citations (same fail-closed stance as safety). Soft-retain only with
+> explicit `PIPELINE_TRUST=demo`.
 
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /
@@ -58,10 +62,22 @@ per ingredient:
                                         │        │         │
                                   AUTHENTICATED  REJECTED  UNVERIFIED
                                         │        │         │
-                                    graded    dropped   kept + flagged
+                                    graded    dropped   omit (strict)
+                                              │              │
+                                              │         soft-retain (demo only)
                                               ▼
                                    grade_pubmed_hits ──► compile_v2
 ```
+
+### Trust mode (`PIPELINE_TRUST`)
+
+| Value | Behavior for efficacy UNVERIFIED (auth error / no confirmation) |
+|-------|------------------------------------------------------------------|
+| `strict` (default, including unset) | **Omit** PMID from compiled citations; caveat records the gap |
+| `demo` | Soft-retain on MeSH gate + UNVERIFIED caveat (legacy exploration) |
+
+Safety §3 cites are always fail-closed (never soft-retain), regardless of this
+flag. Mechanism path never emits UNVERIFIED PMIDs as citations either.
 
 ### The guardrail layer (`guardrails.py`)
 - `EvidenceTier`: NONE → INSUFFICIENT → TRADITIONAL_ONLY → PRECLINICAL →
@@ -97,7 +113,9 @@ and peripheral-mention citation-laundering.
 **Design rule preserved:** Claude *interprets and authenticates*; it never
 overrides the deterministic guardrails. It cannot upgrade a tier above what the
 evidence licenses, cannot clear a disease-claim flag, and a transient auth
-failure is surfaced as **UNVERIFIED** (needs review), never silently dropped.
+failure is surfaced as **UNVERIFIED** (needs review). Under `PIPELINE_TRUST=strict`
+(default) that PMID is **omitted** from compiled citations; only
+`PIPELINE_TRUST=demo` soft-retains it.
 
 Enable it by setting `ANTHROPIC_API_KEY` (and optionally
 `AUTHENTICATOR_MODEL`, default `claude-sonnet-5`). With no key, the pipeline
@@ -131,9 +149,9 @@ Offline (guardrail demo — no network):
 python -m dossier_engine.example_run
 ```
 
-Health / readiness unit tests:
+Unit tests:
 ```
-python -m unittest tests.test_pipeline_health -v
+python -m unittest tests.test_pipeline_health tests.test_pipeline_trust -v
 ```
 
 Live (real citations). The clients use public APIs:

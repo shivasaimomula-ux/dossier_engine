@@ -26,7 +26,8 @@ from .guardrails import (
     RelevanceStatus, ClaimEvidenceLink, is_retracted,
 )
 from .sources import PubMedClient, SourceResult
-from .authenticator import ClaudeAuthenticator, AuthResult
+from .authenticator import ClaudeAuthenticator
+from .pipeline_trust import resolve_pipeline_trust, unverified_auth_decision
 
 
 # --------------------------------------------------------------------------
@@ -47,6 +48,10 @@ class PerIngredientVerifier:
       5) Only papers that pass BOTH gates get graded and attached
       6) Off-target, peripheral, and fabricated papers are logged
 
+    UNVERIFIED (transient auth error) policy — ``PIPELINE_TRUST``:
+      - ``strict`` (default): omit from compiled citations (align with safety)
+      - ``demo``: soft-retain on MeSH gate + UNVERIFIED caveat (legacy)
+
     The authenticator catches three failure modes that MeSH gating alone
     cannot:
       - Hallucinated PMIDs (PMID doesn't resolve)
@@ -55,9 +60,12 @@ class PerIngredientVerifier:
     """
 
     def __init__(self, pubmed: PubMedClient,
-                 authenticator: Optional[ClaudeAuthenticator] = None):
+                 authenticator: Optional[ClaudeAuthenticator] = None,
+                 trust_mode: Optional[str] = None):
         self.pubmed = pubmed
         self.authenticator = authenticator
+        # None → resolve from PIPELINE_TRUST at decision time.
+        self.trust_mode = trust_mode
 
     def run(self, state: GraphState) -> None:
         category = state.formulation.product_category or "general"
@@ -152,15 +160,18 @@ class PerIngredientVerifier:
                                 f"{auth.reasoning}"
                             )
                     elif auth.error:
-                        # Transient failure — do NOT drop the evidence. Keep it
-                        # graded but flag it as needing human review.
-                        authenticated.append(paper)
-                        rec.add_caveat(
-                            f"PMID:{auth.pmid} — Claude authentication "
-                            f"UNVERIFIED ({auth.error}); paper retained on the "
-                            f"MeSH relevance gate but not independently "
-                            f"confirmed. Manual review recommended."
+                        # Transient / unavailable auth → UNVERIFIED.
+                        # strict (default): omit from cites (fail-closed).
+                        # demo: soft-retain on MeSH gate (legacy exploration).
+                        mode = self.trust_mode
+                        if mode is None:
+                            mode = resolve_pipeline_trust()
+                        include, caveat = unverified_auth_decision(
+                            auth.pmid, auth.error, trust_mode=mode
                         )
+                        if include:
+                            authenticated.append(paper)
+                        rec.add_caveat(caveat)
                     else:
                         detail = auth.reasoning or auth.actual_finding \
                             or "actual findings do not support this claim"
@@ -253,10 +264,11 @@ class SafetyQueryNode:
       3) ClaudeAuthenticator on on-purpose hits (when available)
       4) Only AUTHENTICATED / PARTIAL (passed) PMIDs become §3 citations
 
-    Fail-closed (unlike efficacy soft-retain): rejected OR unverified
-    (no key / transient auth error) safety PMIDs are NEVER printed as
-    clean citations. Keyword-only PubMed hits without adjudication do
-    not ship. Empty / unverified → honest gap, not clearance.
+    Fail-closed: rejected OR unverified (no key / transient auth error)
+    safety PMIDs are NEVER printed as clean citations. Efficacy matches
+    this under PIPELINE_TRUST=strict (default); efficacy soft-retain is
+    demo-only. Keyword-only PubMed hits without adjudication do not ship.
+    Empty / unverified → honest gap, not clearance.
     """
 
     def __init__(self, pubmed: PubMedClient,
@@ -400,7 +412,7 @@ class SafetyQueryNode:
                             f"{auth.reasoning}"
                         )
                 elif auth.error:
-                    # Fail-closed (unlike efficacy): do NOT soft-retain.
+                    # Fail-closed: never soft-retain safety PMIDs.
                     rec.add_caveat(
                         f"PMID:{auth.pmid} — Claude authentication UNVERIFIED "
                         f"({auth.error}); omitted from §3 cites (safety "

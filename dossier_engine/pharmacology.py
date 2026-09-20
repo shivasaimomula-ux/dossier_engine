@@ -250,9 +250,24 @@ class MechanismDiscoveryNode:
             base["finding"] = best.actual_finding or best.reasoning
             base["citation"] = f"PMID:{best.pmid}"
         else:
-            base["verdict"] = "DB_ONLY"
-            rej = next((a for a in results if a.reasoning), None)
-            base["finding"] = ("Database-reported association; retrieved papers "
-                               "did NOT pass authentication for this pathway. "
-                               + (rej.reasoning if rej else ""))
+            # Never soft-retain UNVERIFIED / rejected PMIDs as mechanism cites.
+            # citation stays "" (fail-closed; demo soft-retain is efficacy-only).
+            unverified = [a for a in results if a.error]
+            if unverified and all(a.error for a in results):
+                base["verdict"] = "UNVERIFIED"
+                errs = "; ".join(
+                    f"PMID:{a.pmid} ({a.error})" for a in unverified[:3]
+                )
+                base["finding"] = (
+                    "Authentication could not be completed; mechanism "
+                    f"citation omitted (UNVERIFIED). {errs}"
+                )
+            else:
+                base["verdict"] = "DB_ONLY"
+                rej = next((a for a in results if a.reasoning), None)
+                base["finding"] = (
+                    "Database-reported association; retrieved papers "
+                    "did NOT pass authentication for this pathway. "
+                    + (rej.reasoning if rej else "")
+                )
         return base
