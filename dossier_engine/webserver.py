@@ -43,35 +43,31 @@ class _NoChembl:
 
 
 def _build_formulation(payload: dict) -> FormulationInput:
+    # Task T6 — shared-contract inbound gate (reject unknown fields / bad schema).
+    from .contract_gate import validate_inbound_formulation
+
+    validated = validate_inbound_formulation(payload)
     # B Modernizer skipped — modernized_sku may be absent or null.
-    _ = payload.get("modernized_sku", None)
-    raw_ings = payload.get("ingredients", [])
+    _ = validated.modernized_sku
     ingredients = [
         Ingredient(
-            name=(i.get("name") or "").strip(),
-            latin_name=(i.get("latin_name") or "").strip() or None,
-            stated_dose=(i.get("stated_dose") or "").strip() or None,
-            stated_standardization=(i.get("stated_standardization") or "").strip() or None,
+            name=i.name,
+            latin_name=i.latin_name,
+            stated_dose=i.stated_dose,
+            stated_standardization=i.stated_standardization,
+            marker_compound=i.marker_compound,
+            marker_is_measured_for_product=i.marker_is_measured_for_product,
         )
-        for i in raw_ings
-        if (i.get("name") or "").strip()
+        for i in validated.ingredients
     ]
-    if not ingredients:
-        raise ValueError("At least one ingredient with a name is required.")
-    claims = [c.strip() for c in payload.get("claimed_benefits", []) if c.strip()]
-    serving = payload.get("serving_size_g")
-    try:
-        serving_size_g = float(serving) if serving is not None and serving != "" else None
-    except (TypeError, ValueError):
-        serving_size_g = None
     return FormulationInput(
-        product_name=(payload.get("product_name") or "Unnamed product").strip(),
+        product_name=validated.product_name,
         ingredients=ingredients,
-        claimed_benefits=claims,
-        target_market=(payload.get("target_market") or "US").strip(),
-        dosage_form=(payload.get("dosage_form") or "").strip() or None,
-        product_category=(payload.get("product_category") or "").strip(),
-        serving_size_g=serving_size_g,
+        claimed_benefits=list(validated.claimed_benefits),
+        target_market=str(validated.target_market),
+        dosage_form=validated.dosage_form,
+        product_category=validated.product_category or "",
+        serving_size_g=validated.serving_size_g,
     )
 
 
@@ -200,9 +196,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = _analyze(payload)
             self._send(200, json.dumps(result))
-        except ValueError as e:
-            self._send(422, json.dumps({"error": str(e)}))
-        except Exception as e:  # noqa: BLE001 — surface to the UI
+        except Exception as e:  # noqa: BLE001 — classify below
+            try:
+                from pydantic import ValidationError
+                from .contract_gate import http_error_body
+            except ImportError:
+                ValidationError = type(None)  # type: ignore[misc, assignment]
+                http_error_body = None  # type: ignore[assignment]
+            if ValidationError is not type(None) and isinstance(e, ValidationError):
+                self._send(422, json.dumps(http_error_body(e)))
+                return
+            if isinstance(e, ValueError):
+                self._send(422, json.dumps({"error": str(e)}))
+                return
             traceback.print_exc()
             self._send(500, json.dumps({"error": f"Analysis failed: {e}"}))
 
