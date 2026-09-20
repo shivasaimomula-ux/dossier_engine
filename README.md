@@ -20,6 +20,11 @@
 > When the inbound payload includes a B `modernized_sku`, C validates it and
 > compiles BCS / delivery / markers into dossier sections (absent SKU still OK
 > for classical / B-stubbed runs).
+>
+> Async jobs (Task T18 / Finding #14): prefer `POST /api/jobs/analyze` → poll
+> `GET /api/jobs/{job_id}` (progress for C’s own UI). Sync `/api/analyze`
+> remains for glue backward compatibility. Budgets:
+> `ANALYZE_JOB_TIMEOUT_S` (default 540), `ANALYZE_MAX_CONCURRENT_JOBS` (2).
 
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /

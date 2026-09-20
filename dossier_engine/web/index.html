@@ -321,12 +321,38 @@ async function run() {
     use_auth: document.getElementById('useAuth').checked,
   };
 
-  btn.disabled = true; status.innerHTML = '<span class="spinner"></span> Running live PubMed + authentication…';
+  btn.disabled = true; status.innerHTML = '<span class="spinner"></span> Submitting analyze job…';
   document.getElementById('results').innerHTML = '';
   try {
-    const res = await fetch('/api/analyze', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    let submit = await fetch('/api/jobs/analyze', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    });
+    // Fallback to sync /api/analyze if jobs endpoint missing (older server)
+    if (submit.status === 404) {
+      const res = await fetch('/api/analyze', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      data.analyzed_at = new Date().toISOString();
+      saveToHistory(data); render(data); status.textContent = 'Done.';
+      return;
+    }
+    let job = await submit.json();
+    if (!submit.ok) throw new Error(job.error || ('Submit failed: ' + submit.status));
+    const pollUrl = job.poll_url || ('/api/jobs/' + job.job_id);
+    while (job.status === 'queued' || job.status === 'running') {
+      const p = job.progress || {};
+      status.innerHTML = `<span class="spinner"></span> ${p.message || job.status} (${p.percent || 0}%)`;
+      await new Promise(r => setTimeout(r, 900));
+      const pr = await fetch(pollUrl);
+      job = await pr.json();
+      if (!pr.ok) throw new Error(job.error || 'Poll failed');
+    }
+    if (job.status !== 'succeeded' || !job.result) {
+      throw new Error(job.error || ('Job ' + job.status));
+    }
+    const data = job.result;
     data.analyzed_at = new Date().toISOString();
     saveToHistory(data);
     render(data);

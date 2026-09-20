@@ -14,16 +14,24 @@ The /api/analyze endpoint runs the full live pipeline (PubMed + Claude
 authentication when ANTHROPIC_API_KEY is set) and returns the compiled
 markdown report, a structured summary the frontend renders as cards, and a
 versioned herbenzo-contracts ``Dossier`` JSON (Task T7) for Stage E / glue.
+
+Async jobs (Task T18 / Finding #14):
+  POST /api/jobs/analyze → 202 {job_id}; GET /api/jobs/{id} polls progress.
+  POST /api/analyze stays synchronous for backward compatibility (glue).
+  Stage C UI polls its own jobs — not a mega dashboard.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 from .state import FormulationInput, Ingredient, GraphState
 from .nodes import LabelDissector, ScripturalNode, RegulatoryNode
@@ -37,6 +45,11 @@ from .pipeline_health import build_health_payload
 
 PORT = int(os.environ.get("PORT", "8010"))
 WEB_DIR = Path(__file__).resolve().parent / "web"
+ANALYZE_JOB_TIMEOUT_S = float(os.environ.get("ANALYZE_JOB_TIMEOUT_S", "540"))
+ANALYZE_MAX_CONCURRENT_JOBS = int(os.environ.get("ANALYZE_MAX_CONCURRENT_JOBS", "2"))
+
+ProgressCb = Callable[[str, int, str, Optional[Dict[str, Any]]], None]
+_JOB_PATH = re.compile(r"^/api/jobs/([0-9a-fA-F-]{36})(/result)?$")
 
 
 class _NoChembl:
@@ -77,7 +90,23 @@ def _build_formulation(payload: dict):
     return formulation, validated
 
 
-def _analyze(payload: dict) -> dict:
+def _progress(
+    cb: ProgressCb | None,
+    stage: str,
+    percent: int,
+    message: str,
+    detail: Optional[Dict[str, Any]] = None,
+) -> None:
+    if cb is None:
+        return
+    try:
+        cb(stage, percent, message, detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _analyze(payload: dict, *, on_progress: ProgressCb | None = None) -> dict:
+    _progress(on_progress, "validate", 5, "Validating formulation…")
     formulation, validated = _build_formulation(payload)
     use_auth = payload.get("use_auth", True)
 
@@ -91,13 +120,20 @@ def _analyze(payload: dict) -> dict:
             auth_enabled = True
 
     state = GraphState(formulation=formulation)
+    _progress(on_progress, "label", 12, "Dissecting label…")
     LabelDissector().run(state, chembl=_NoChembl())
+    _progress(on_progress, "per_ingredient", 30, "Per-ingredient PubMed + auth…")
     PerIngredientVerifier(pubmed, authenticator=auth).run(state)
+    _progress(on_progress, "mechanism", 50, "Mechanism discovery…")
     MechanismDiscoveryNode(PubChemClient(), pubmed, authenticator=auth).run(state)
+    _progress(on_progress, "safety", 65, "Safety queries…")
     SafetyQueryNode(pubmed, authenticator=auth).run(state)
+    _progress(on_progress, "scriptural", 75, "Scriptural node…")
     ScripturalNode().run(state)
+    _progress(on_progress, "regulatory", 85, "Regulatory flags…")
     RegulatoryNode().run(state)
 
+    _progress(on_progress, "compile", 92, "Compiling dossier…")
     report_md = compile_v2(state)
 
     per_ingredient = [
@@ -159,6 +195,7 @@ def _analyze(payload: dict) -> dict:
     )
 
     enum_meta = enum_resolution_meta(dossier)
+    _progress(on_progress, "done", 100, "Complete")
 
     return {
         "product_name": formulation.product_name,
@@ -192,33 +229,85 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_json(self, code: int, obj: dict, *, location: str | None = None):
+        data = json.dumps(obj).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        if location:
+            self.send_header("Location", location)
+        self.end_headers()
+        self.wfile.write(data)
+
     def log_message(self, fmt, *args):  # quieter console
         sys.stderr.write("  %s\n" % (fmt % args))
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             index = WEB_DIR / "index.html"
             try:
                 self._send(200, index.read_bytes(), "text/html; charset=utf-8")
             except OSError:
                 self._send(404, "index.html not found")
             return
-        if self.path == "/api/health":
+        if path == "/api/health":
             auth = ClaudeAuthenticator()
-            self._send(
-                200,
-                json.dumps(
-                    build_health_payload(
-                        auth_available=auth.available,
-                        model=auth.model,
-                    )
-                ),
+            payload = build_health_payload(
+                auth_available=auth.available,
+                model=auth.model,
             )
+            payload.update(
+                {
+                    "async_jobs": True,
+                    "analyze_job_timeout_s": ANALYZE_JOB_TIMEOUT_S,
+                    "analyze_max_concurrent_jobs": ANALYZE_MAX_CONCURRENT_JOBS,
+                }
+            )
+            self._send(200, json.dumps(payload))
+            return
+        m = _JOB_PATH.match(path)
+        if m:
+            from . import jobs as jobmod
+
+            job_id, want_result = m.group(1), m.group(2)
+            rec = jobmod.STORE.get(job_id)
+            if not rec:
+                self._send_json(404, {"error": "Unknown job_id"})
+                return
+            if want_result:
+                if rec.status in ("queued", "running"):
+                    self._send_json(
+                        409,
+                        {
+                            "error": "Job not finished",
+                            "status": rec.status,
+                            "progress": {
+                                "stage": rec.progress_stage,
+                                "percent": rec.progress_percent,
+                                "message": rec.progress_message,
+                            },
+                        },
+                    )
+                    return
+                if rec.status == "succeeded":
+                    self._send_json(200, rec.result or {})
+                    return
+                self._send_json(
+                    422,
+                    {"error": rec.error or "Job failed", "status": rec.status},
+                )
+                return
+            self._send_json(200, jobmod.STORE.public_view(rec))
             return
         self._send(404, "Not found")
 
     def do_POST(self):
-        if self.path != "/api/analyze":
+        path = urlparse(self.path).path
+        if path == "/api/jobs/analyze":
+            self._handle_job_submit()
+            return
+        if path != "/api/analyze":
             self._send(404, "Not found")
             return
         try:
@@ -231,20 +320,56 @@ class Handler(BaseHTTPRequestHandler):
             result = _analyze(payload)
             self._send(200, json.dumps(result))
         except Exception as e:  # noqa: BLE001 — classify below
-            try:
-                from pydantic import ValidationError
-                from .contract_gate import http_error_body
-            except ImportError:
-                ValidationError = type(None)  # type: ignore[misc, assignment]
-                http_error_body = None  # type: ignore[assignment]
-            if ValidationError is not type(None) and isinstance(e, ValidationError):
-                self._send(422, json.dumps(http_error_body(e)))
-                return
-            if isinstance(e, ValueError):
-                self._send(422, json.dumps({"error": str(e)}))
-                return
-            traceback.print_exc()
-            self._send(500, json.dumps({"error": f"Analysis failed: {e}"}))
+            self._send_analyze_error(e)
+
+    def _handle_job_submit(self):
+        from . import jobs as jobmod
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": f"Bad request: {e}"})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "JSON object required"})
+            return
+        # Validate early so async jobs fail fast (422) instead of after poll.
+        try:
+            _build_formulation(payload)
+        except Exception as e:  # noqa: BLE001
+            self._send_analyze_error(e)
+            return
+        timeout_s = payload.pop("_timeout_s", None)
+        try:
+            timeout_s = float(timeout_s) if timeout_s is not None else None
+        except (TypeError, ValueError):
+            timeout_s = None
+        idem = self.headers.get("Idempotency-Key")
+        rec = jobmod.STORE.submit_analyze(
+            payload=payload,
+            idempotency_key=idem,
+            timeout_s=timeout_s,
+            runner=_analyze,
+        )
+        view = jobmod.STORE.public_view(rec)
+        self._send_json(202, view, location=view["poll_url"])
+
+    def _send_analyze_error(self, e: BaseException) -> None:
+        try:
+            from pydantic import ValidationError
+            from .contract_gate import http_error_body
+        except ImportError:
+            ValidationError = type(None)  # type: ignore[misc, assignment]
+            http_error_body = None  # type: ignore[assignment]
+        if ValidationError is not type(None) and isinstance(e, ValidationError):
+            self._send(422, json.dumps(http_error_body(e)))
+            return
+        if isinstance(e, ValueError):
+            self._send(422, json.dumps({"error": str(e)}))
+            return
+        traceback.print_exc()
+        self._send(500, json.dumps({"error": f"Analysis failed: {e}"}))
 
 
 def main() -> int:
