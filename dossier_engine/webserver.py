@@ -140,17 +140,21 @@ def _analyze(payload: dict) -> dict:
     ]
 
     # Task T7 — versioned structured Dossier (markdown remains for humans).
+    # Task T12 — consume ModernizedSKU when present (do not discard BCS/delivery/markers).
+    from .contract_gate import parse_optional_modernized_sku
+
+    sku = parse_optional_modernized_sku(validated.modernized_sku)
     dossier = build_dossier(
         state,
         report_md,
         confidence=getattr(validated, "confidence", None),
         inherited_confidence=getattr(validated, "inherited_confidence", None),
         confidence_floor=getattr(validated, "confidence_floor", None),
-        modernized_sku_present=validated.modernized_sku is not None,
-        source_sku_id=(
-            validated.modernized_sku.get("sku_id")
-            if isinstance(validated.modernized_sku, dict)
-            else None
+        modernized_sku=sku,
+        modernized_sku_present=sku is not None,
+        source_sku_id=sku.sku_id if sku is not None else None,
+        source_formulation_id=(
+            sku.source_formulation_id if sku is not None else None
         ),
     )
 

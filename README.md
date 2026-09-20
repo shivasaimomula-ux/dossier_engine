@@ -14,9 +14,12 @@
 > compiled citations (same fail-closed stance as safety). Soft-retain only with
 > explicit `PIPELINE_TRUST=demo`.
 >
-> Handoff (Task T7): `POST /api/analyze` returns `report_markdown` **and** a
+> Handoff (Task T7/T12): `POST /api/analyze` returns `report_markdown` **and** a
 > versioned `dossier` object (`herbenzo-contracts` `schema_version: "1.0.0"`)
 > for Stage E / glue. Markdown stays for humans; E prefers the structured JSON.
+> When the inbound payload includes a B `modernized_sku`, C validates it and
+> compiles BCS / delivery / markers into dossier sections (absent SKU still OK
+> for classical / B-stubbed runs).
 
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /

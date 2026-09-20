@@ -1,7 +1,8 @@
-"""Emit versioned herbenzo-contracts ``Dossier`` from GraphState (Task T7/T8).
+"""Emit versioned herbenzo-contracts ``Dossier`` from GraphState (Task T7/T8/T12).
 
 Markdown remains the human companion; the structured payload is the C→E
 machine handoff. Task T8 attaches ``regulatory_category`` via shared enums.
+Task T12 consumes optional B ``ModernizedSKU`` (BCS / delivery / markers).
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from herbenzo_contracts import (
     DossierEvidenceItem,
     DossierIngredient,
     DossierSection,
+    ModernizedIngredient,
+    ModernizedSKU,
     resolve_regulatory_category,
     resolve_target_market,
 )
@@ -23,7 +26,7 @@ from herbenzo_contracts import (
 from .guardrails import EvidenceRecord, EvidenceTier
 from .state import GraphState
 
-ENGINE_VERSION = "C-dossier/1.1.0"
+ENGINE_VERSION = "C-dossier/1.2.0"
 
 _AUTH_STATUS = {
     "supported": "supported",
@@ -121,6 +124,188 @@ def _confidence_pair(
     return confidence, inherited
 
 
+def _norm_name(text: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _match_sku_ingredient(
+    label_name: str,
+    latin_name: Optional[str],
+    sku_ings: list[ModernizedIngredient],
+    used: set[int],
+) -> Optional[ModernizedIngredient]:
+    """Best-effort label ↔ ModernizedIngredient match (name / botanical)."""
+    label = _norm_name(label_name)
+    latin = _norm_name(latin_name)
+    for idx, mi in enumerate(sku_ings):
+        if idx in used:
+            continue
+        bot = _norm_name(mi.botanical_name)
+        if latin and (latin == bot or latin in bot or bot in latin):
+            used.add(idx)
+            return mi
+        if label and (label == bot or bot in label or label in bot):
+            used.add(idx)
+            return mi
+    return None
+
+
+def _enrich_ingredients_from_sku(
+    ingredients: list[DossierIngredient],
+    sku: ModernizedSKU,
+) -> list[DossierIngredient]:
+    """Overlay HB-* id, quantity_mg, and marker from B when names align."""
+    used: set[int] = set()
+    enriched: list[DossierIngredient] = []
+    for ing in ingredients:
+        mi = _match_sku_ingredient(
+            ing.name, ing.latin_name, list(sku.ingredients), used
+        )
+        if mi is None:
+            enriched.append(ing)
+            continue
+        marker_name = mi.marker.marker_name if mi.marker else None
+        enriched.append(
+            ing.model_copy(
+                update={
+                    "ingredient_id": mi.ingredient_id or ing.ingredient_id,
+                    "quantity_mg": mi.quantity_mg
+                    if mi.quantity_mg is not None
+                    else ing.quantity_mg,
+                    "marker_compound": marker_name or ing.marker_compound,
+                    "latin_name": ing.latin_name or mi.botanical_name,
+                }
+            )
+        )
+    return enriched
+
+
+def _sections_from_modernized_sku(sku: ModernizedSKU) -> list[DossierSection]:
+    """Compile BCS class, delivery system, and markers into dossier sections."""
+    marker_items: list[DossierEvidenceItem] = []
+    bcs_items: list[DossierEvidenceItem] = []
+    delivery_items: list[DossierEvidenceItem] = []
+    marker_gaps: list[str] = []
+    bcs_gaps: list[str] = []
+    delivery_gaps: list[str] = []
+
+    for mi in sku.ingredients:
+        label = mi.botanical_name or mi.ingredient_id
+        marker = mi.marker
+        props = marker.properties
+        marker_note = (
+            f"ingredient_id={mi.ingredient_id}; "
+            f"is_proxy={marker.is_proxy}; "
+            f"pubchem_cid={props.pubchem_cid}; "
+            f"rationale={marker.rationale}"
+        )
+        if mi.marker_dose_mg is not None:
+            marker_note += f"; marker_dose_mg={mi.marker_dose_mg}"
+        marker_items.append(
+            DossierEvidenceItem(
+                claim=f"{label}: marker {marker.marker_name}",
+                status="supported" if not marker.is_proxy else "partial",
+                note=marker_note,
+                confidence=None,
+            )
+        )
+        if marker.is_proxy:
+            marker_gaps.append(
+                f"{label}: marker {marker.marker_name} is a proxy for multi-constituent extract"
+            )
+
+        bcs = mi.bcs
+        bcs_class = (
+            bcs.bcs_class.value
+            if hasattr(bcs.bcs_class, "value")
+            else str(bcs.bcs_class)
+        )
+        bcs_items.append(
+            DossierEvidenceItem(
+                claim=f"{label}: BCS class {bcs_class}",
+                status="supported",
+                note=(
+                    f"solubility={bcs.solubility_call}; "
+                    f"permeability={bcs.permeability_call}; "
+                    f"evidence_basis={bcs.evidence_basis}; "
+                    + "; ".join(bcs.rationale)
+                ),
+                confidence=bcs.confidence,
+            )
+        )
+        if bcs.is_regulatory_determination is False:
+            bcs_gaps.append(
+                f"{label}: BCS {bcs_class} is advisory (not a regulatory determination)"
+            )
+
+        delivery = mi.delivery
+        primary = (
+            delivery.primary.value
+            if hasattr(delivery.primary, "value")
+            else str(delivery.primary)
+        )
+        alts = [
+            a.value if hasattr(a, "value") else str(a)
+            for a in (delivery.alternatives or [])
+        ]
+        bio = delivery.bioavailability
+        bio_bits: list[str] = []
+        if bio.qualitative_expectation:
+            bio_bits.append(bio.qualitative_expectation)
+        if bio.fold_change is not None:
+            bio_bits.append(f"fold_change={bio.fold_change}")
+        if bio.pmid:
+            bio_bits.append(f"PMID:{bio.pmid}")
+        delivery_note = (
+            f"primary={primary}"
+            + (f"; alternatives={','.join(alts)}" if alts else "")
+            + (f"; excipients={','.join(delivery.excipients)}" if delivery.excipients else "")
+            + (f"; bioavailability={'; '.join(bio_bits)}" if bio_bits else "")
+            + "; "
+            + "; ".join(delivery.rationale)
+            + "; advisory_only=true"
+        )
+        delivery_items.append(
+            DossierEvidenceItem(
+                claim=f"{label}: delivery {primary}",
+                pmid=bio.pmid,
+                tier=(
+                    bio.evidence_tier.value
+                    if bio.evidence_tier is not None
+                    and hasattr(bio.evidence_tier, "value")
+                    else (str(bio.evidence_tier) if bio.evidence_tier else None)
+                ),
+                status="partial",  # delivery is advisory_only
+                note=delivery_note,
+                confidence=None,
+            )
+        )
+        delivery_gaps.append(
+            f"{label}: delivery recommendation is advisory_only (active unchanged)"
+        )
+
+    return [
+        DossierSection(
+            key="markers",
+            title="Marker compounds (from ModernizedSKU)",
+            items=marker_items,
+            gaps=marker_gaps,
+        ),
+        DossierSection(
+            key="bcs",
+            title="BCS assessment (from ModernizedSKU)",
+            items=bcs_items,
+            gaps=bcs_gaps,
+        ),
+        DossierSection(
+            key="delivery",
+            title="Delivery system (from ModernizedSKU)",
+            items=delivery_items,
+            gaps=delivery_gaps,
+        ),
+    ]
+
+
 def build_dossier(
     state: GraphState,
     report_markdown: str,
@@ -131,11 +316,28 @@ def build_dossier(
     dossier_id: Optional[str] = None,
     source_formulation_id: Optional[str] = None,
     source_sku_id: Optional[str] = None,
+    modernized_sku: Optional[ModernizedSKU] = None,
     modernized_sku_present: bool = False,
     engine_version: str = ENGINE_VERSION,
 ) -> Dossier:
-    """Compile GraphState + markdown companion into a versioned ``Dossier``."""
+    """Compile GraphState + markdown companion into a versioned ``Dossier``.
+
+    When ``modernized_sku`` is provided (B→C), BCS / delivery / markers are
+    compiled into dossier sections and ingredient lines are enriched. When
+    absent, classical/label path still emits a valid Dossier (B-stubbed runs).
+    """
     formulation = state.formulation
+
+    sku = modernized_sku
+    if sku is not None:
+        modernized_sku_present = True
+        source_sku_id = source_sku_id or sku.sku_id
+        source_formulation_id = source_formulation_id or sku.source_formulation_id
+        if confidence is None:
+            confidence = sku.confidence
+        if inherited_confidence is None:
+            inherited_confidence = sku.inherited_confidence
+
     conf, inherited = _confidence_pair(
         confidence, inherited_confidence, confidence_floor
     )
@@ -155,6 +357,8 @@ def build_dossier(
     ]
     if not ingredients:
         raise ValueError("Dossier requires at least one ingredient")
+    if sku is not None:
+        ingredients = _enrich_ingredients_from_sku(ingredients, sku)
 
     sections: list[DossierSection] = []
 
@@ -271,6 +475,10 @@ def build_dossier(
             gaps=[],
         )
     )
+
+    # Task T12 — BCS / delivery / markers from B ModernizedSKU (when present).
+    if sku is not None:
+        sections.extend(_sections_from_modernized_sku(sku))
 
     # Regulatory flags as gaps (claims / market framing)
     reg_gaps = [str(f) for f in (state.regulatory_flags or [])]
