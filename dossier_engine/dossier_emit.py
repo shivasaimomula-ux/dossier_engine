@@ -1,7 +1,7 @@
-"""Emit versioned herbenzo-contracts ``Dossier`` from GraphState (Task T7).
+"""Emit versioned herbenzo-contracts ``Dossier`` from GraphState (Task T7/T8).
 
 Markdown remains the human companion; the structured payload is the C→E
-machine handoff. Does not expand category enums (Task T8).
+machine handoff. Task T8 attaches ``regulatory_category`` via shared enums.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from herbenzo_contracts import (
     DossierEvidenceItem,
     DossierIngredient,
     DossierSection,
+    resolve_regulatory_category,
+    resolve_target_market,
 )
 
 from .guardrails import EvidenceRecord, EvidenceTier
@@ -284,11 +286,24 @@ def build_dossier(
     category = (formulation.product_category or "").strip() or "general"
     market = str(formulation.target_market or "US")
 
-    return Dossier(
+    # Task T8: resolve shared regulatory lens. Prefer explicit field; else
+    # try product_category aliases (dietary_supplement → SUPPLEMENT). MeSH
+    # indications like anti-inflammatory stay on product_category and drop
+    # regulatory_category with a documented warning (no silent SUPPLEMENT).
+    reg_raw = getattr(formulation, "regulatory_category", None)
+    if not reg_raw:
+        reg_raw = category if category != "general" else None
+    cat_res = resolve_regulatory_category(reg_raw)
+    mkt_res = resolve_target_market(market, for_e=False)
+    regulatory = cat_res["value"]
+    market_out = mkt_res["value"] or market
+
+    dossier = Dossier(
         dossier_id=dossier_id or _dossier_id(formulation.product_name),
         product_name=formulation.product_name,
         product_category=category,
-        target_market=market,  # type: ignore[arg-type]
+        regulatory_category=regulatory,  # type: ignore[arg-type]
+        target_market=market_out,  # type: ignore[arg-type]
         dosage_form=formulation.dosage_form,
         serving_size_g=formulation.serving_size_g,
         claimed_benefits=list(formulation.claimed_benefits or []),
@@ -303,11 +318,49 @@ def build_dossier(
         source_stage="C:dossier",
         engine_version=engine_version,
     )
+    # Stash resolution for callers that want _meta-style diagnostics without
+    # polluting the strict Dossier schema.
+    dossier._category_resolution = {  # type: ignore[attr-defined]
+        "category": cat_res["value"],
+        "categoryLabel": cat_res["label"],
+        "input": cat_res["input"],
+        "mappedFrom": cat_res["mapped_from"],
+        "recognized": cat_res["recognized"],
+        "dropped": cat_res["dropped"],
+        "warning": cat_res["warning"],
+    }
+    dossier._market_resolution = {  # type: ignore[attr-defined]
+        "market": mkt_res["value"],
+        "marketLabel": mkt_res["label"],
+        "input": mkt_res["input"],
+        "mappedFrom": mkt_res["mapped_from"],
+        "recognized": mkt_res["recognized"],
+        "dropped": mkt_res["dropped"],
+        "warning": mkt_res["warning"],
+    }
+    return dossier
 
 
 def dossier_to_wire(dossier: Dossier) -> dict[str, Any]:
-    """JSON-serializable dict (schema_version 1.0.0)."""
+    """JSON-serializable dict (schema_version 1.0.0).
+
+    Enum resolution diagnostics live on the object as ``_category_resolution`` /
+    ``_market_resolution`` attributes — callers may attach them beside the
+    dossier in the HTTP envelope, not inside the strict schema payload.
+    """
     return dossier.model_dump(mode="json")
+
+
+def enum_resolution_meta(dossier: Dossier) -> dict[str, Any]:
+    """Extract T8 resolution dicts for HTTP / glue envelopes."""
+    out: dict[str, Any] = {}
+    cat = getattr(dossier, "_category_resolution", None)
+    mkt = getattr(dossier, "_market_resolution", None)
+    if cat is not None:
+        out["categoryResolution"] = cat
+    if mkt is not None:
+        out["marketResolution"] = mkt
+    return out
 
 
 def content_fingerprint(dossier: Dossier) -> str:

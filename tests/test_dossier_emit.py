@@ -121,6 +121,9 @@ class TestDossierEmit(unittest.TestCase):
         self.assertEqual(dossier.confidence, 0.8)
         self.assertEqual(dossier.inherited_confidence, 0.8)
         self.assertFalse(dossier.modernized_sku_present)
+        # MeSH indication does not invent a regulatory lens (Finding #10 / T8).
+        self.assertIsNone(dossier.regulatory_category)
+        self.assertTrue(getattr(dossier, "_category_resolution")["dropped"])
 
         keys = {s.key for s in dossier.sections}
         self.assertIn("per_ingredient_efficacy", keys)

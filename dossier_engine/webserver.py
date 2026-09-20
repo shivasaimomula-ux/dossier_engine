@@ -30,7 +30,7 @@ from .nodes import LabelDissector, ScripturalNode, RegulatoryNode
 from .nodes_v2 import PerIngredientVerifier, SafetyQueryNode
 from .pharmacology import MechanismDiscoveryNode
 from .compiler_v2 import compile_v2
-from .dossier_emit import build_dossier, dossier_to_wire
+from .dossier_emit import build_dossier, dossier_to_wire, enum_resolution_meta
 from .sources import PubMedClient, PubChemClient, SourceResult
 from .authenticator import ClaudeAuthenticator
 from .pipeline_health import build_health_payload
@@ -67,6 +67,11 @@ def _build_formulation(payload: dict):
         target_market=str(validated.target_market),
         dosage_form=validated.dosage_form,
         product_category=validated.product_category or "",
+        regulatory_category=(
+            str(validated.regulatory_category)
+            if validated.regulatory_category is not None
+            else None
+        ),
         serving_size_g=validated.serving_size_g,
     )
     return formulation, validated
@@ -149,14 +154,22 @@ def _analyze(payload: dict) -> dict:
         ),
     )
 
+    enum_meta = enum_resolution_meta(dossier)
+
     return {
         "product_name": formulation.product_name,
         "category": formulation.product_category or "general",
+        "regulatory_category": (
+            str(dossier.regulatory_category)
+            if dossier.regulatory_category is not None
+            else None
+        ),
         "target_market": formulation.target_market,
         "auth_enabled": auth_enabled,
         "auth_requested": bool(use_auth),
         "report_markdown": report_md,
         "dossier": dossier_to_wire(dossier),
+        "enum_resolution": enum_meta,
         "per_ingredient": per_ingredient,
         "safety": safety,
         "pharmacology": state.pharmacology,

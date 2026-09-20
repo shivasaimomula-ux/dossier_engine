@@ -121,6 +121,11 @@ def load_formulation(path: Path) -> FormulationInput:
         target_market=str(validated.target_market),
         dosage_form=validated.dosage_form,
         product_category=validated.product_category or "",
+        regulatory_category=(
+            str(validated.regulatory_category)
+            if validated.regulatory_category is not None
+            else None
+        ),
         serving_size_g=validated.serving_size_g,
     )
 
