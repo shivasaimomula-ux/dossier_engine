@@ -1,5 +1,15 @@
 # Honest Clinical & Regulatory Evidence Engine
 
+> **Pipeline C (canonical):** this worktree / `harden-c` branch is the **only**
+> Stage C build allowed on the Herbenzo glue path. Desktop base
+> `~/Desktop/dossier_engine` is **quarantined** (keyword-only safety PMIDs —
+> see that tree’s `QUARANTINED.md`). Independent C UI stays here; do not merge
+> stage UIs.
+>
+> Health: `GET /api/health` returns `safety_adjudication: "required"` and
+> `pipeline_ready: true` only when `ANTHROPIC_API_KEY` is wired. Set
+> `PIPELINE_MODE=1` to refuse startup without the key.
+
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /
 specialist topology from the original spec, but its defining rule is:
@@ -96,6 +106,16 @@ SDK (`pip install -r requirements.txt`).
 
 ## Running it
 
+**Web UI (pipeline-capable):** from this harden tree only:
+
+```
+cp .env.example .env          # paste ANTHROPIC_API_KEY
+pip install -r requirements.txt
+python -m dossier_engine.webserver
+# → http://127.0.0.1:8010/api/health
+# Expect: "safety_adjudication": "required", "pipeline_ready": true
+```
+
 Any formulation from a JSON file (live PubMed + Claude authentication):
 ```
 cp .env.example .env          # then paste your ANTHROPIC_API_KEY into .env
@@ -111,6 +131,11 @@ Offline (guardrail demo — no network):
 python -m dossier_engine.example_run
 ```
 
+Health / readiness unit tests:
+```
+python -m unittest tests.test_pipeline_health -v
+```
+
 Live (real citations). The clients use public APIs:
 PubMed E-utilities, ChEMBL REST, ClinicalTrials.gov v2. Run where those hosts
 are reachable, or pass an `mcp_call` bridge to the Orchestrator to use the
@@ -124,3 +149,5 @@ Anthropic PubMed/ChEMBL/Clinical Trials connectors instead. See
   Replace them with verified, citable indexes before production use.
 - Tier assignment is heuristic from metadata; it flags strength, it does not
   replace expert appraisal of individual studies.
+- Do **not** point glue or operators at `~/Desktop/dossier_engine` (base); that
+  tree ships keyword-only safety citations without Claude adjudication.

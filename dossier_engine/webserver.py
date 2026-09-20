@@ -31,6 +31,7 @@ from .pharmacology import MechanismDiscoveryNode
 from .compiler_v2 import compile_v2
 from .sources import PubMedClient, PubChemClient, SourceResult
 from .authenticator import ClaudeAuthenticator
+from .pipeline_health import build_health_payload
 
 PORT = int(os.environ.get("PORT", "8010"))
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -174,11 +175,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/health":
             auth = ClaudeAuthenticator()
-            self._send(200, json.dumps({
-                "ok": True,
-                "auth_available": auth.available,
-                "model": auth.model,
-            }))
+            self._send(
+                200,
+                json.dumps(
+                    build_health_payload(
+                        auth_available=auth.available,
+                        model=auth.model,
+                    )
+                ),
+            )
             return
         self._send(404, "Not found")
 
@@ -204,11 +209,43 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     auth = ClaudeAuthenticator()
-    state = (f"Claude authentication ENABLED ({auth.model})"
-             if auth.available else
-             "Claude authentication DISABLED (no ANTHROPIC_API_KEY) — "
-             "deterministic MeSH gate only")
-    print(f"\nDossier Engine platform  •  {state}")
+    health = build_health_payload(
+        auth_available=auth.available,
+        model=auth.model,
+    )
+    pipeline_mode = os.environ.get("PIPELINE_MODE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    if pipeline_mode and not health["pipeline_ready"]:
+        print(
+            "\nREFUSED: PIPELINE_MODE requires ANTHROPIC_API_KEY "
+            "(safety adjudication). Set the key in .env or unset PIPELINE_MODE "
+            "for local UI exploration only.\n",
+            file=sys.stderr,
+        )
+        return 2
+
+    state = (
+        f"Claude authentication ENABLED ({auth.model})"
+        if auth.available
+        else (
+            "Claude authentication DISABLED (no ANTHROPIC_API_KEY) — "
+            "safety §3 fail-closed; pipeline_ready=false"
+        )
+    )
+    print(f"\nDossier Engine platform (harden-C)  •  {state}")
+    print(
+        f"  safety_adjudication={health['safety_adjudication']}  "
+        f"pipeline_ready={health['pipeline_ready']}"
+    )
+    if not health["pipeline_ready"]:
+        print(
+            "  WARNING: not pipeline-ready — glue/operators must not treat "
+            "this process as export-trustworthy until ANTHROPIC_API_KEY is set."
+        )
     print(f"Open  http://localhost:{PORT}\n")
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     try:
