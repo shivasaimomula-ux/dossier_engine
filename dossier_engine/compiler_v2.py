@@ -85,10 +85,11 @@ def compile_v2(state: GraphState) -> str:
     # 3. Safety per ingredient (Priority 2 output)
     out.append("## 3. Safety & interaction profile per ingredient (QUERIED)")
     out.append("")
-    out.append("> Safety searches were run independently of efficacy. An "
-               "ingredient with zero efficacy data still gets full safety "
-               "coverage. 'No data retrieved' = safety NOT assessed, not "
-               "'safe'.")
+    out.append("> Safety searches run independently of efficacy. Safety PMIDs "
+               "must pass MeSH/title relevance AND Claude authentication "
+               "(same adjudicator as efficacy). Rejected or unverified safety "
+               "cites are omitted (fail-closed) — never printed as clearance. "
+               "'No data / not cited' = safety NOT assessed, not 'safe'.")
     out.append("")
     for ing, rec in state.queried_safety:
         out.append(f"### {ing.name} ({ing.latin_name or '—'})")
@@ -156,9 +157,11 @@ def compile_v2(state: GraphState) -> str:
     if state.authentication_log:
         out.append("## 6. Claude Authentication Log")
         out.append("")
-        out.append("> Every claim-PMID pair was verified by Claude against the "
-                   "real PubMed abstract. Papers whose actual findings do not "
-                   "support the attributed claim are REJECTED.")
+        out.append("> Every claim-PMID pair (efficacy, mechanism, and safety) "
+                   "was verified by Claude against the real PubMed abstract. "
+                   "Papers whose actual findings do not support the attributed "
+                   "claim are REJECTED. Safety section is fail-closed: "
+                   "UNVERIFIED safety PMIDs are omitted from §3 cites.")
         out.append("")
         passed = [a for a in state.authentication_log if a.passed]
         failed = [a for a in state.authentication_log if not a.passed and not a.error]

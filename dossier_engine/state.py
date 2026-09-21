@@ -41,7 +41,9 @@ class FormulationInput:
     claimed_benefits: list             # list[str], as marketed
     target_market: str = "US"          # drives which regulatory frame applies
     dosage_form: Optional[str] = None  # "capsule", "softgel", "phytosome", ...
-    product_category: str = ""         # "laxative", "anti-inflammatory", etc.
+    product_category: str = ""         # MeSH / indication: "laxative", "anti-inflammatory"
+    # Shared E regulatory lens (Task T8). None → resolve from product_category aliases.
+    regulatory_category: Optional[str] = None
     serving_size_g: Optional[float] = None  # grams per serving (for dose calc)
 
 

@@ -100,26 +100,33 @@ def interactive_formulation() -> FormulationInput:
 
 def load_formulation(path: Path) -> FormulationInput:
     data = json.loads(path.read_text(encoding="utf-8"))
-    raw_ings = data.get("ingredients", [])
-    if not raw_ings:
-        raise ValueError("Formulation must list at least one ingredient.")
+    from .contract_gate import validate_inbound_formulation
+
+    validated = validate_inbound_formulation(data)
     ingredients = [
         Ingredient(
-            name=i["name"],
-            latin_name=i.get("latin_name"),
-            stated_dose=i.get("stated_dose"),
-            stated_standardization=i.get("stated_standardization"),
+            name=i.name,
+            latin_name=i.latin_name,
+            stated_dose=i.stated_dose,
+            stated_standardization=i.stated_standardization,
+            marker_compound=i.marker_compound,
+            marker_is_measured_for_product=i.marker_is_measured_for_product,
         )
-        for i in raw_ings
+        for i in validated.ingredients
     ]
     return FormulationInput(
-        product_name=data.get("product_name", "Unnamed product"),
+        product_name=validated.product_name,
         ingredients=ingredients,
-        claimed_benefits=data.get("claimed_benefits", []),
-        target_market=data.get("target_market", "US"),
-        dosage_form=data.get("dosage_form"),
-        product_category=data.get("product_category", ""),
-        serving_size_g=data.get("serving_size_g"),
+        claimed_benefits=list(validated.claimed_benefits),
+        target_market=str(validated.target_market),
+        dosage_form=validated.dosage_form,
+        product_category=validated.product_category or "",
+        regulatory_category=(
+            str(validated.regulatory_category)
+            if validated.regulatory_category is not None
+            else None
+        ),
+        serving_size_g=validated.serving_size_g,
     )
 
 
@@ -144,7 +151,7 @@ def run(formulation: FormulationInput, use_auth: bool = True) -> GraphState:
     LabelDissector().run(state, chembl=_NoChembl())
     PerIngredientVerifier(pubmed, authenticator=auth).run(state)
     MechanismDiscoveryNode(PubChemClient(), pubmed, authenticator=auth).run(state)
-    SafetyQueryNode(pubmed).run(state)
+    SafetyQueryNode(pubmed, authenticator=auth).run(state)
     ScripturalNode().run(state)
     RegulatoryNode().run(state)
     return state

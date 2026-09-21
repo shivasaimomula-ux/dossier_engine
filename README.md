@@ -1,5 +1,31 @@
 # Honest Clinical & Regulatory Evidence Engine
 
+> **Pipeline C (canonical):** this worktree / `harden-c` branch is the **only**
+> Stage C build allowed on the Herbenzo glue path. Desktop base
+> `~/Desktop/dossier_engine` is **quarantined** (keyword-only safety PMIDs —
+> see that tree’s `QUARANTINED.md`). Independent C UI stays here; do not merge
+> stage UIs.
+>
+> Health: `GET /api/health` returns `safety_adjudication: "required"` and
+> `pipeline_ready: true` only when `ANTHROPIC_API_KEY` is wired. Set
+> `PIPELINE_MODE=1` to refuse startup without the key.
+>
+> Trust: `PIPELINE_TRUST=strict` (default) omits UNVERIFIED efficacy PMIDs from
+> compiled citations (same fail-closed stance as safety). Soft-retain only with
+> explicit `PIPELINE_TRUST=demo`.
+>
+> Handoff (Task T7/T12): `POST /api/analyze` returns `report_markdown` **and** a
+> versioned `dossier` object (`herbenzo-contracts` `schema_version: "1.0.0"`)
+> for Stage E / glue. Markdown stays for humans; E prefers the structured JSON.
+> When the inbound payload includes a B `modernized_sku`, C validates it and
+> compiles BCS / delivery / markers into dossier sections (absent SKU still OK
+> for classical / B-stubbed runs).
+>
+> Async jobs (Task T18 / Finding #14): prefer `POST /api/jobs/analyze` → poll
+> `GET /api/jobs/{job_id}` (progress for C’s own UI). Sync `/api/analyze`
+> remains for glue backward compatibility. Budgets:
+> `ANALYZE_JOB_TIMEOUT_S` (default 540), `ANALYZE_MAX_CONCURRENT_JOBS` (2).
+
 A multi-agent graph that ingests a supplement formulation and produces an
 **evidence map** — not a polished marketing dossier. It keeps the orchestrator /
 specialist topology from the original spec, but its defining rule is:
@@ -48,10 +74,22 @@ per ingredient:
                                         │        │         │
                                   AUTHENTICATED  REJECTED  UNVERIFIED
                                         │        │         │
-                                    graded    dropped   kept + flagged
+                                    graded    dropped   omit (strict)
+                                              │              │
+                                              │         soft-retain (demo only)
                                               ▼
                                    grade_pubmed_hits ──► compile_v2
 ```
+
+### Trust mode (`PIPELINE_TRUST`)
+
+| Value | Behavior for efficacy UNVERIFIED (auth error / no confirmation) |
+|-------|------------------------------------------------------------------|
+| `strict` (default, including unset) | **Omit** PMID from compiled citations; caveat records the gap |
+| `demo` | Soft-retain on MeSH gate + UNVERIFIED caveat (legacy exploration) |
+
+Safety §3 cites are always fail-closed (never soft-retain), regardless of this
+flag. Mechanism path never emits UNVERIFIED PMIDs as citations either.
 
 ### The guardrail layer (`guardrails.py`)
 - `EvidenceTier`: NONE → INSUFFICIENT → TRADITIONAL_ONLY → PRECLINICAL →
@@ -87,14 +125,41 @@ and peripheral-mention citation-laundering.
 **Design rule preserved:** Claude *interprets and authenticates*; it never
 overrides the deterministic guardrails. It cannot upgrade a tier above what the
 evidence licenses, cannot clear a disease-claim flag, and a transient auth
-failure is surfaced as **UNVERIFIED** (needs review), never silently dropped.
+failure is surfaced as **UNVERIFIED** (needs review). Under `PIPELINE_TRUST=strict`
+(default) that PMID is **omitted** from compiled citations; only
+`PIPELINE_TRUST=demo` soft-retains it.
 
 Enable it by setting `ANTHROPIC_API_KEY` (and optionally
 `AUTHENTICATOR_MODEL`, default `claude-sonnet-5`). With no key, the pipeline
 falls back to the deterministic MeSH relevance gate. Requires the `anthropic`
 SDK (`pip install -r requirements.txt`).
 
+### `.env` only — never `.env.txt` (Audit #23 / Task T24)
+
+Runtime loads **only** project-root `.env` as `KEY=value` lines
+(`dossier_engine.authenticator._load_dotenv`). A historical `.env.txt` (often a
+raw key blob on the quarantined base tree) is **not** read. Migrate:
+
+```bash
+cp .env.example .env
+# Edit .env → ANTHROPIC_API_KEY=sk-ant-…
+# Delete leftover .env.txt after migrating (it is gitignored).
+```
+
+If `.env.txt` exists without `.env`, import prints a WARNING. See glue
+`SECRETS.md` for the federation key map.
+
 ## Running it
+
+**Web UI (pipeline-capable):** from this harden tree only:
+
+```
+cp .env.example .env          # paste ANTHROPIC_API_KEY
+pip install -r requirements.txt
+python -m dossier_engine.webserver
+# → http://127.0.0.1:8010/api/health
+# Expect: "safety_adjudication": "required", "pipeline_ready": true
+```
 
 Any formulation from a JSON file (live PubMed + Claude authentication):
 ```
@@ -111,6 +176,11 @@ Offline (guardrail demo — no network):
 python -m dossier_engine.example_run
 ```
 
+Unit tests:
+```
+python -m unittest tests.test_pipeline_health tests.test_pipeline_trust -v
+```
+
 Live (real citations). The clients use public APIs:
 PubMed E-utilities, ChEMBL REST, ClinicalTrials.gov v2. Run where those hosts
 are reachable, or pass an `mcp_call` bridge to the Orchestrator to use the
@@ -124,3 +194,5 @@ Anthropic PubMed/ChEMBL/Clinical Trials connectors instead. See
   Replace them with verified, citable indexes before production use.
 - Tier assignment is heuristic from metadata; it flags strength, it does not
   replace expert appraisal of individual studies.
+- Do **not** point glue or operators at `~/Desktop/dossier_engine` (base); that
+  tree ships keyword-only safety citations without Claude adjudication.
