@@ -28,3 +28,17 @@ prints a hard warning on startup and **refuses** when `PIPELINE_MODE=1`
 
 Point scripts, glue `C_URL`, and docs at **harden-c only**. Keep C’s
 independent UI; do not merge stage UIs.
+
+## Secrets trap (`.env.txt`) — Audit #23 / Task T24
+
+This base tree historically held a raw-blob `.env.txt`. **No Herbenzo runtime
+loads `.env.txt`.** Pipeline C (`dossier_engine-harden-c`) reads only `.env`
+as `KEY=value`.
+
+If you still have `.env.txt` here:
+
+1. Do **not** point glue at this tree.
+2. On harden-c: `cp .env.example .env` and paste `ANTHROPIC_API_KEY=…`.
+3. Delete or leave the local `.env.txt` (gitignored); never commit it.
+
+See harden-c README and glue `SECRETS.md`.
