@@ -180,6 +180,10 @@ def _analyze(payload: dict, *, on_progress: ProgressCb | None = None) -> dict:
     from .contract_gate import parse_optional_modernized_sku
 
     sku = parse_optional_modernized_sku(validated.modernized_sku)
+    inbound_thread = None
+    if getattr(validated, "provenance_thread", None) is not None:
+        pt = validated.provenance_thread
+        inbound_thread = pt.model_dump(mode="json") if hasattr(pt, "model_dump") else pt
     dossier = build_dossier(
         state,
         report_md,
@@ -192,10 +196,15 @@ def _analyze(payload: dict, *, on_progress: ProgressCb | None = None) -> dict:
         source_formulation_id=(
             sku.source_formulation_id if sku is not None else None
         ),
+        provenance_thread=inbound_thread,
     )
 
     enum_meta = enum_resolution_meta(dossier)
     _progress(on_progress, "done", 100, "Complete")
+
+    thread_wire = None
+    if dossier.provenance_thread is not None:
+        thread_wire = dossier.provenance_thread.model_dump(mode="json")
 
     return {
         "product_name": formulation.product_name,
@@ -211,6 +220,7 @@ def _analyze(payload: dict, *, on_progress: ProgressCb | None = None) -> dict:
         "report_markdown": report_md,
         "dossier": dossier_to_wire(dossier),
         "enum_resolution": enum_meta,
+        "provenance_thread": thread_wire,
         "per_ingredient": per_ingredient,
         "safety": safety,
         "pharmacology": state.pharmacology,

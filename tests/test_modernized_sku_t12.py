@@ -158,6 +158,10 @@ class TestModernizedSkuAbsent(unittest.TestCase):
         self.assertIsNone(dossier.ingredients[0].ingredient_id)
         self.assertIsNone(dossier.ingredients[0].quantity_mg)
         self.assertIsNone(dossier.ingredients[0].marker_compound)
+        self.assertIsNotNone(dossier.provenance_thread)
+        self.assertIsNotNone(dossier.provenance_thread.dossier_hash)
+        self.assertEqual(len(dossier.provenance_thread.dossier_hash), 64)
+        self.assertIn("C", dossier.provenance_thread.stages)
 
 
 class TestModernizedSkuPresent(unittest.TestCase):

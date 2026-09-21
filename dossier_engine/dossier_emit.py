@@ -7,7 +7,6 @@ Task T12 consumes optional B ``ModernizedSKU`` (BCS / delivery / markers).
 
 from __future__ import annotations
 
-import hashlib
 import re
 import uuid
 from typing import Any, Optional
@@ -21,6 +20,10 @@ from herbenzo_contracts import (
     ModernizedSKU,
     resolve_regulatory_category,
     resolve_target_market,
+)
+from herbenzo_contracts.provenance import (
+    dossier_content_hash,
+    extend_from_handoff,
 )
 
 from .guardrails import EvidenceRecord, EvidenceTier
@@ -319,6 +322,7 @@ def build_dossier(
     modernized_sku: Optional[ModernizedSKU] = None,
     modernized_sku_present: bool = False,
     engine_version: str = ENGINE_VERSION,
+    provenance_thread: Optional[dict[str, Any]] = None,
 ) -> Dossier:
     """Compile GraphState + markdown companion into a versioned ``Dossier``.
 
@@ -337,6 +341,11 @@ def build_dossier(
             confidence = sku.confidence
         if inherited_confidence is None:
             inherited_confidence = sku.inherited_confidence
+        if provenance_thread is None and getattr(sku, "provenance_thread", None) is not None:
+            pt = sku.provenance_thread
+            provenance_thread = (
+                pt.model_dump(mode="json") if hasattr(pt, "model_dump") else pt
+            )
 
     conf, inherited = _confidence_pair(
         confidence, inherited_confidence, confidence_floor
@@ -526,6 +535,22 @@ def build_dossier(
         source_stage="C:dossier",
         engine_version=engine_version,
     )
+    # Task T22 — echo upstream IDs + dossier_hash on the run-thread.
+    dhash = dossier_content_hash(dossier)
+    thread = extend_from_handoff(
+        provenance_thread,
+        stage="C",
+        payload={
+            "formulation_id": source_formulation_id,
+            "sku_id": source_sku_id,
+            "dossier_id": dossier.dossier_id,
+        },
+        dossier_id=dossier.dossier_id,
+        dossier_hash=dhash,
+        formulation_id=source_formulation_id,
+        sku_id=source_sku_id,
+    )
+    dossier = dossier.model_copy(update={"provenance_thread": thread})
     # Stash resolution for callers that want _meta-style diagnostics without
     # polluting the strict Dossier schema.
     dossier._category_resolution = {  # type: ignore[attr-defined]
@@ -572,7 +597,7 @@ def enum_resolution_meta(dossier: Dossier) -> dict[str, Any]:
 
 
 def content_fingerprint(dossier: Dossier) -> str:
-    """Stable-ish hash of structured content (excludes generated_at / id noise)."""
-    payload = dossier.model_dump(mode="json", exclude={"generated_at", "dossier_id"})
-    raw = repr(sorted(payload.items())).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()[:16]
+    """Stable hash of structured content (full sha256; Task T22 dossier_hash)."""
+    if dossier.provenance_thread and dossier.provenance_thread.dossier_hash:
+        return dossier.provenance_thread.dossier_hash
+    return dossier_content_hash(dossier)

@@ -378,7 +378,18 @@ function render(d, opts = {}) {
       <button class="btn secondary" onclick="exportHtml()" style="padding:.4rem .8rem;font-size:.82rem">⬇ HTML</button>
       <button class="btn secondary" onclick="exportMd()" style="padding:.4rem .8rem;font-size:.82rem">⬇ Markdown</button>
     </span>
-  </div>${d.analyzed_at?`<div class="note" style="margin-top:.4rem">Analyzed ${new Date(d.analyzed_at).toLocaleString()}</div>`:''}</div>`;
+  </div>${d.analyzed_at?`<div class="note" style="margin-top:.4rem">Analyzed ${new Date(d.analyzed_at).toLocaleString()}</div>`:''}`;
+  const pt = d.provenance_thread || (d.dossier && d.dossier.provenance_thread) || {};
+  if (pt.spec_id || pt.formulation_id || pt.sku_id || pt.dossier_hash) {
+    const bits = [
+      pt.spec_id ? `spec_id=${pt.spec_id}` : null,
+      pt.formulation_id ? `formulation_id=${pt.formulation_id}` : null,
+      pt.sku_id ? `sku_id=${pt.sku_id}` : null,
+      pt.dossier_hash ? `dossier_hash=${String(pt.dossier_hash).slice(0,12)}…` : null,
+    ].filter(Boolean).join(' → ');
+    h += `<div class="note" style="margin-top:.4rem">Provenance: ${bits}</div>`;
+  }
+  h += `</div>`;
 
   // per-ingredient tiers
   h += '<h3>Per-ingredient evidence</h3><div class="grid">';
