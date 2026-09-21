@@ -134,6 +134,21 @@ Enable it by setting `ANTHROPIC_API_KEY` (and optionally
 falls back to the deterministic MeSH relevance gate. Requires the `anthropic`
 SDK (`pip install -r requirements.txt`).
 
+### `.env` only — never `.env.txt` (Audit #23 / Task T24)
+
+Runtime loads **only** project-root `.env` as `KEY=value` lines
+(`dossier_engine.authenticator._load_dotenv`). A historical `.env.txt` (often a
+raw key blob on the quarantined base tree) is **not** read. Migrate:
+
+```bash
+cp .env.example .env
+# Edit .env → ANTHROPIC_API_KEY=sk-ant-…
+# Delete leftover .env.txt after migrating (it is gitignored).
+```
+
+If `.env.txt` exists without `.env`, import prints a WARNING. See glue
+`SECRETS.md` for the federation key map.
+
 ## Running it
 
 **Web UI (pipeline-capable):** from this harden tree only:

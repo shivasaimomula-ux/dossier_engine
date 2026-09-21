@@ -32,12 +32,37 @@ from .guardrails import EvidenceTier
 from .sources import PubMedClient
 
 
+def _warn_env_txt_trap(root: Path, env_path: Path) -> None:
+    """Audit #23 / Task T24: base C historically used .env.txt (often a raw
+    key blob). Runtime loads only project-root .env as KEY=value lines."""
+    env_txt = root / ".env.txt"
+    if not env_txt.exists():
+        return
+    if env_path.exists():
+        print(
+            "Note: .env.txt is ignored — secrets load from .env only "
+            "(KEY=value). Prefer deleting .env.txt after migrating.",
+            flush=True,
+        )
+        return
+    print(
+        "WARNING: found .env.txt but no .env. Runtime does NOT load "
+        ".env.txt. Migrate: cp .env.example .env && paste "
+        "ANTHROPIC_API_KEY=… as KEY=value (see README / SECRETS.md).",
+        flush=True,
+    )
+
+
 def _load_dotenv() -> None:
     """Populate os.environ from a project-root .env file (KEY=VALUE lines).
     Already-set environment variables win, so an explicit `export` still
     overrides the file. Silently does nothing if .env is absent. Lets local
-    testing keep the API key out of shell history."""
-    env_path = Path(__file__).resolve().parent.parent / ".env"
+    testing keep the API key out of shell history.
+
+    Does **not** read `.env.txt` (Audit Finding #23 trap)."""
+    root = Path(__file__).resolve().parent.parent
+    env_path = root / ".env"
+    _warn_env_txt_trap(root, env_path)
     try:
         raw = env_path.read_text(encoding="utf-8")
     except OSError:
