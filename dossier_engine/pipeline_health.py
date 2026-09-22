@@ -20,9 +20,10 @@ def build_health_payload(
     *,
     auth_available: bool,
     model: Optional[str] = None,
+    cost: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return the JSON body for GET /api/health on harden-C."""
-    return {
+    payload: Dict[str, Any] = {
         "ok": True,
         "auth_available": bool(auth_available),
         "model": model,
@@ -31,6 +32,9 @@ def build_health_payload(
         "pipeline_ready": bool(auth_available),
         "build": "harden-c",
     }
+    if cost:
+        payload.update(cost)
+    return payload
 
 
 def is_pipeline_ready(payload: Dict[str, Any]) -> bool:
