@@ -21,13 +21,14 @@ available, set use_mcp=True and wire `mcp_call` to your connector bridge.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
 import xml.etree.ElementTree as ET
 import dataclasses
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 
 from .guardrails import Citation
 
@@ -39,6 +40,35 @@ PUBCHEM_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 PUBCHEM_SDQ = "https://pubchem.ncbi.nlm.nih.gov/sdq/sdqagent.cgi"
 
 USER_AGENT = "honest-dossier-engine/1.0 (research; contact: your-email@example.com)"
+
+# Optional shared PMID disk cache (B-vendored herbenzo-pubmed-cache). Soft dep.
+_PMID_CACHE: Any = None
+_PMID_CACHE_TRIED = False
+
+
+def _pmid_cache():
+    """Lazy-load shared PmidDiskCache when package + env are present."""
+    global _PMID_CACHE, _PMID_CACHE_TRIED
+    if _PMID_CACHE_TRIED:
+        return _PMID_CACHE
+    _PMID_CACHE_TRIED = True
+    try:
+        from herbenzo_pubmed_cache import PmidDiskCache  # type: ignore
+    except ImportError:
+        _PMID_CACHE = None
+        return None
+    cache_dir = os.environ.get("HERBENZO_PUBMED_CACHE_DIR") or None
+    ttl_raw = os.environ.get("HERBENZO_PUBMED_CACHE_TTL_S")
+    ttl = int(ttl_raw) if ttl_raw not in (None, "") else 2592000
+    _PMID_CACHE = PmidDiskCache(cache_dir=cache_dir, ttl_seconds=ttl)
+    return _PMID_CACHE
+
+
+def reset_pmid_cache_for_tests(cache=None) -> None:
+    """Test hook."""
+    global _PMID_CACHE, _PMID_CACHE_TRIED
+    _PMID_CACHE = cache
+    _PMID_CACHE_TRIED = True
 
 
 @dataclasses.dataclass
@@ -159,15 +189,34 @@ class PubMedClient:
         """Fetch full records with abstracts and MeSH terms via efetch XML.
         Returns list of dicts with keys: pmid, title, abstract, article_types,
         mesh_terms, doi. This fetches from PubMed directly — the ground truth,
-        not whatever the retrieving LLM claims the paper says."""
+        not whatever the retrieving LLM claims the paper says.
+
+        N5.1: read-through against shared ``herbenzo-pubmed-cache`` when the
+        B-vendored package is installed (optional soft dep).
+        """
         if not pmids:
             return []
+        cache = _pmid_cache()
+        pending: list = []
+        records: list = []
+        for raw in pmids:
+            p = str(raw)
+            if cache is not None:
+                hit = cache.get_pmid(p)
+                if hit is not None:
+                    records.append(_normalize_cached_pmid(hit, p))
+                    continue
+            pending.append(p)
+
+        if not pending:
+            return records
+
+        fetched: list = []
         if self.mcp_call:
             try:
-                res = self.mcp_call("PubMed:get_article_metadata", {"pmids": pmids})
-                records = []
+                res = self.mcp_call("PubMed:get_article_metadata", {"pmids": pending})
                 for a in res.get("articles", []):
-                    records.append({
+                    fetched.append({
                         "pmid": str(a.get("identifiers", {}).get("pmid", "")),
                         "doi": a.get("identifiers", {}).get("doi"),
                         "title": a.get("title", ""),
@@ -175,17 +224,32 @@ class PubMedClient:
                         "article_types": a.get("article_types", []),
                         "mesh_terms": a.get("mesh_terms", []),
                     })
-                return records
             except Exception:
-                return []
-        try:
-            time.sleep(0.34)
-            ids = ",".join(str(p) for p in pmids)
-            url = (f"{PUBMED_BASE}/efetch.fcgi?db=pubmed&retmode=xml&id={ids}")
-            xml_text = _get_text(url, timeout=30)
-            return self._parse_efetch_xml(xml_text)
-        except (urllib.error.URLError, TimeoutError, OSError):
-            return []
+                fetched = []
+        else:
+            try:
+                time.sleep(0.34)
+                ids = ",".join(str(p) for p in pending)
+                url = (f"{PUBMED_BASE}/efetch.fcgi?db=pubmed&retmode=xml&id={ids}")
+                xml_text = _get_text(url, timeout=30)
+                fetched = self._parse_efetch_xml(xml_text)
+            except (urllib.error.URLError, TimeoutError, OSError):
+                fetched = []
+
+        if cache is not None:
+            for rec in fetched:
+                pmid = str(rec.get("pmid") or "")
+                if pmid:
+                    cache.put_pmid(pmid, {
+                        "pmid": pmid,
+                        "title": rec.get("title") or "",
+                        "abstract": rec.get("abstract") or "",
+                        "mesh_terms": list(rec.get("mesh_terms") or []),
+                        "publication_types": list(rec.get("article_types") or []),
+                        "doi": rec.get("doi"),
+                    })
+        records.extend(fetched)
+        return records
 
     @staticmethod
     def _parse_efetch_xml(xml_text: str) -> list:
@@ -258,6 +322,23 @@ class PubMedClient:
                 title=r.get("title"), doi=r.get("doi"), study_type=study_type,
             ))
         return cites
+
+
+def _normalize_cached_pmid(hit: dict, pmid: str) -> dict:
+    """Map shared-cache / B envelope payload onto C record shape."""
+    payload = hit.get("payload") if isinstance(hit.get("payload"), dict) else hit
+    return {
+        "pmid": str(payload.get("pmid") or pmid),
+        "doi": payload.get("doi"),
+        "title": payload.get("title") or "",
+        "abstract": payload.get("abstract") or "",
+        "article_types": list(
+            payload.get("article_types")
+            or payload.get("publication_types")
+            or []
+        ),
+        "mesh_terms": list(payload.get("mesh_terms") or []),
+    }
 
 
 class ChemblClient:

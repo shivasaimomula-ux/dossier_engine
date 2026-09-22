@@ -1,21 +1,14 @@
 """
 authenticator.py
 ================
-Claude-based verification layer for PubMed claim-evidence pairs.
+Citation verification layer for PubMed claim-evidence pairs.
 
-Sits between retrieval (by any LLM — Gemini, GPT, or the engine's own
-PubMed client) and evidence grading. Every claim-PMID pair must pass
-Claude authentication before it counts as supporting evidence.
+N5.1 cost lock-in: prefer the blue adjudication service (:8011) which runs
+lexical → NIM → Gemini → Claude hard-reject only. Local Claude remains the
+fallback when adjudication is down or disabled.
 
-Claude reads the REAL abstract fetched directly from PubMed's own API —
-not from the retrieving LLM's description — and verifies:
-  1. Does the PMID resolve to a real paper?
-  2. Does the paper actually support the specific claim being made?
-  3. What is the true evidence level (in-vitro / animal / human)?
-  4. Is this the paper's primary finding or a peripheral mention?
-  5. Is the same PMID being over-applied across unrelated claims?
-
-When the authenticator is unavailable (no API key), claims are marked
+Every claim-PMID pair must pass authentication before it counts as supporting
+evidence. When neither adjudication nor Claude is available, claims are marked
 UNVERIFIED and pass through to the existing deterministic guardrails.
 """
 
@@ -28,6 +21,12 @@ import dataclasses
 from pathlib import Path
 from typing import Optional
 
+from .adjudication_client import (
+    ADJUDICATION_PREFERRED,
+    ADJUDICATION_URL,
+    COST_ORDER,
+    AdjudicationClient,
+)
 from .guardrails import EvidenceTier
 from .sources import PubMedClient
 
@@ -204,7 +203,7 @@ _LEVEL_TO_TIER = {
 
 @dataclasses.dataclass
 class AuthResult:
-    """Outcome of Claude's verification of one claim-PMID pair."""
+    """Outcome of verification of one claim-PMID pair."""
     pmid: str
     claim: str
     ingredient: str
@@ -244,19 +243,72 @@ class AuthResult:
         return "AUTHENTICATED"
 
 
+def map_adjudication_to_auth_result(
+    data: dict,
+    *,
+    pmid: str,
+    claim: str,
+    ingredient: str,
+) -> AuthResult:
+    """Map blue ``/adjudicate`` JSON onto C's AuthResult shape."""
+    result = AuthResult(pmid=pmid, claim=claim, ingredient=ingredient)
+    flags = [str(f) for f in (data.get("flags") or [])]
+    path = str(data.get("path") or "unknown")
+    flags.append(f"adj_path:{path}")
+    note = str(data.get("note") or "")
+    legacy = str(data.get("legacy_verdict") or "").upper()
+    verdict = str(data.get("verdict") or "").lower()
+
+    if legacy == "UNVERIFIED" or "UNVERIFIED" in flags:
+        result.error = note or "Adjudication returned UNVERIFIED"
+        result.flags = flags
+        result.reasoning = note
+        return result
+
+    if verdict == "support" or legacy == "AUTHENTICATED":
+        result.claim_supported = "supported"
+        result.finding_type = "primary"
+    elif verdict == "partial" or legacy == "PARTIAL":
+        result.claim_supported = "partial"
+        result.finding_type = "secondary"
+    else:
+        result.claim_supported = "unsupported"
+        result.finding_type = "not_mentioned"
+        if verdict in {"reject", "rejected"} or legacy == "REJECTED":
+            # Confident reject — keep pmid_valid True unless record missing.
+            if "record_not_found" in [str(c).lower() for c in (data.get("reason_codes") or [])]:
+                result.pmid_valid = False
+                result.claim_supported = "fabricated"
+                result.flags.append("PMID_NOT_FOUND")
+
+    result.reasoning = note
+    result.actual_finding = note
+    result.flags = flags
+    # Evidence tier stays NONE unless Claude local path fills it; nodes still
+    # use MeSH/guardrail grading when authenticated_tier is NONE.
+    return result
+
+
 class ClaudeAuthenticator:
     """
-    Verifies claim-PMID pairs using Claude. Fetches the real abstract from
-    PubMed directly, then asks Claude whether the paper supports the claim.
+    Verifies claim-PMID pairs. Prefers blue adjudication (:8011); falls back
+    to local Claude when adjudication is disabled or unreachable.
     """
 
     def __init__(self, api_key: Optional[str] = None,
                  model: Optional[str] = None,
-                 pubmed: Optional[PubMedClient] = None):
+                 pubmed: Optional[PubMedClient] = None,
+                 adjudication: Optional[AdjudicationClient] = None):
         self.model = model or AUTHENTICATOR_MODEL
-        self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        # Explicit api_key="" disables Claude even if env has a key (tests).
+        if api_key is not None:
+            self._api_key = api_key
+        else:
+            self._api_key = os.environ.get("ANTHROPIC_API_KEY")
         self._client = None
         self.pubmed = pubmed or PubMedClient()
+        self._adjudication = adjudication
+        self._adj_reachable_cache: Optional[bool] = None
 
     @property
     def client(self):
@@ -271,8 +323,40 @@ class ClaudeAuthenticator:
         return self._client
 
     @property
-    def available(self) -> bool:
+    def claude_available(self) -> bool:
         return bool(self._api_key and self._api_key.startswith("sk-ant-"))
+
+    def _adj_client(self) -> AdjudicationClient:
+        if self._adjudication is None:
+            self._adjudication = AdjudicationClient()
+        return self._adjudication
+
+    def adjudication_reachable(self) -> bool:
+        if not ADJUDICATION_PREFERRED:
+            return False
+        if self._adj_reachable_cache is None:
+            self._adj_reachable_cache = self._adj_client().is_reachable()
+        return bool(self._adj_reachable_cache)
+
+    @property
+    def available(self) -> bool:
+        """Ready when blue adjudication is up, or local Claude key is set."""
+        if self.claude_available:
+            return True
+        return self.adjudication_reachable()
+
+    def describe_cost_config(self) -> dict:
+        return {
+            "cost_order": list(COST_ORDER),
+            "adjudication_url": ADJUDICATION_URL,
+            "adjudication_preferred": ADJUDICATION_PREFERRED,
+            "adjudication_reachable": (
+                self.adjudication_reachable() if ADJUDICATION_PREFERRED else False
+            ),
+            "claude_fallback_available": self.claude_available,
+            "claude_model": self.model,
+            "default_volume_path_is_claude": False,
+        }
 
     def fetch_ground_truth(self, pmids: list) -> dict:
         """Fetch real abstracts from PubMed. Returns {pmid: record_dict}."""
@@ -284,12 +368,33 @@ class ClaudeAuthenticator:
         """Verify a single claim-PMID pair against PubMed ground truth."""
         result = AuthResult(pmid=pmid, claim=claim, ingredient=ingredient)
 
-        if not self.available:
-            result.error = "No Anthropic API key configured"
+        paper = (ground_truth or {}).get(pmid)
+
+        # N5.1: prefer blue adjudication (NIM/Gemini first; Claude hard-reject).
+        if ADJUDICATION_PREFERRED:
+            try:
+                mapped = self._verify_via_adjudication(
+                    pmid=pmid,
+                    claim=claim,
+                    ingredient=ingredient,
+                    category=category,
+                    paper=paper,
+                )
+                if mapped is not None:
+                    return mapped
+            except Exception as exc:  # noqa: BLE001 — fall through to Claude
+                result.flags.append(f"adj_error:{type(exc).__name__}")
+
+        if not self.claude_available:
+            if "adj_error" in " ".join(result.flags):
+                result.error = (
+                    "Adjudication failed and no Anthropic API key for Claude fallback"
+                )
+            else:
+                result.error = "No Anthropic API key configured"
             result.flags.append("UNVERIFIED")
             return result
 
-        paper = (ground_truth or {}).get(pmid)
         if not paper or not paper.get("abstract"):
             result.pmid_valid = False
             result.claim_supported = "fabricated"
@@ -380,7 +485,45 @@ class ClaudeAuthenticator:
             result.error = f"Authenticator error: {e}"
             result.flags.append("AUTH_ERROR")
 
+        result.flags.append("claude_local_fallback")
         return result
+
+    def _verify_via_adjudication(
+        self,
+        *,
+        pmid: str,
+        claim: str,
+        ingredient: str,
+        category: str,
+        paper: Optional[dict],
+    ) -> Optional[AuthResult]:
+        """Call blue :8011. Returns None to signal fall through to Claude."""
+        if not self.adjudication_reachable():
+            return None
+
+        article = None
+        if paper:
+            article = {
+                "pmid": str(pmid),
+                "title": paper.get("title") or "",
+                "abstract": paper.get("abstract") or "",
+                "mesh_terms": list(paper.get("mesh_terms") or []),
+                "publication_types": list(paper.get("article_types") or []),
+                "retracted": bool(paper.get("retracted", False)),
+            }
+
+        domain = "safety" if "safety" in (category or "").lower() else "general"
+        data = self._adj_client().adjudicate(
+            claim=claim,
+            product=ingredient,
+            pmid=str(pmid),
+            claim_domain=domain,
+            article=article,
+            mode="auto",
+        )
+        return map_adjudication_to_auth_result(
+            data, pmid=str(pmid), claim=claim, ingredient=ingredient
+        )
 
     def verify_batch(self, pairs: list, category: str = "") -> list:
         """Verify multiple claim-PMID pairs. Also detects PMID spreading.

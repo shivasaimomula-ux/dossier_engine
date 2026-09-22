@@ -263,9 +263,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/health":
             auth = ClaudeAuthenticator()
+            cost = auth.describe_cost_config()
             payload = build_health_payload(
                 auth_available=auth.available,
                 model=auth.model,
+                cost=cost,
             )
             payload.update(
                 {
