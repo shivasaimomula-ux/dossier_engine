@@ -229,11 +229,21 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 document.getElementById('agents').innerHTML = AGENTS.map(([n,t,d]) =>
   `<div class="agent"><span class="n">${n}</span><h4>${t}</h4><p>${d}</p></div>`).join('');
 
-// health badge
+// health badge — N4.1: surface pipeline_ready (harden-C trust signal)
 fetch('/api/health').then(r => r.json()).then(h => {
   const b = document.getElementById('authBadge');
-  if (h.auth_available) { b.textContent = 'Claude auth ON · ' + h.model; b.className = 'badge on'; }
-  else { b.textContent = 'Claude auth OFF · deterministic gate'; b.className = 'badge off'; document.getElementById('useAuth').checked = false; }
+  const ready = h.pipeline_ready === true;
+  const auth = h.auth_available;
+  const build = h.build || h.safety_adjudication || '';
+  if (auth) {
+    b.textContent = (ready ? 'pipeline_ready · ' : 'NOT pipeline_ready · ') + 'Claude auth ON · ' + (h.model || '');
+    b.className = ready ? 'badge on' : 'badge off';
+  } else {
+    b.textContent = (ready ? 'pipeline_ready · ' : 'NOT pipeline_ready · ') + 'Claude auth OFF · deterministic gate' + (build ? ' · ' + build : '');
+    b.className = 'badge off';
+    const ua = document.getElementById('useAuth');
+    if (ua) ua.checked = false;
+  }
 }).catch(() => {});
 
 // dynamic rows
@@ -380,15 +390,19 @@ function render(d, opts = {}) {
     </span>
   </div>${d.analyzed_at?`<div class="note" style="margin-top:.4rem">Analyzed ${new Date(d.analyzed_at).toLocaleString()}</div>`:''}`;
   const pt = d.provenance_thread || (d.dossier && d.dossier.provenance_thread) || {};
-  if (pt.spec_id || pt.formulation_id || pt.sku_id || pt.dossier_hash) {
-    const bits = [
-      pt.spec_id ? `spec_id=${pt.spec_id}` : null,
-      pt.formulation_id ? `formulation_id=${pt.formulation_id}` : null,
-      pt.sku_id ? `sku_id=${pt.sku_id}` : null,
-      pt.dossier_hash ? `dossier_hash=${String(pt.dossier_hash).slice(0,12)}…` : null,
-    ].filter(Boolean).join(' → ');
-    h += `<div class="note" style="margin-top:.4rem">Provenance: ${bits}</div>`;
-  }
+  const stages = Array.isArray(pt.stages) ? pt.stages.join(',') : (pt.stages || 'B,C');
+  const eReady = !!(pt.dossier_hash || (d.dossier && (d.dossier.dossier_id || d.dossier_id)) || d.dossier_id);
+  const bits = [
+    pt.spec_id ? `spec_id=${pt.spec_id}` : null,
+    pt.formulation_id ? `formulation_id=${pt.formulation_id}` : null,
+    pt.sku_id ? `sku_id=${pt.sku_id}` : null,
+    pt.dossier_hash ? `dossier_hash=${String(pt.dossier_hash).slice(0,12)}…` : null,
+  ].filter(Boolean).join(' → ');
+  h += `<div class="note" style="margin-top:.4rem;font-family:ui-monospace,monospace">` +
+    `Handoff · <strong style="color:${eReady?'var(--ok,#7dcea0)':'var(--warn,#e8b86d)'}">${eReady?'→E ready':'→E incomplete'}</strong>` +
+    ` · stages=[${stages}]` +
+    (bits ? `<br>Provenance: ${bits}` : '') +
+    `</div>`;
   h += `</div>`;
 
   // per-ingredient tiers
